@@ -15,7 +15,8 @@
     "test:integration": "vitest run tests/integration/",
     "test:e2e": "vitest run tests/e2e/",
     "typecheck": "tsc --noEmit",
-    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build"
+    "ci": "pnpm typecheck && pnpm lint && pnpm test && pnpm build",
+    "prepare": "tsup"
   },
   "engines": {
     "node": ">=20.0.0"
