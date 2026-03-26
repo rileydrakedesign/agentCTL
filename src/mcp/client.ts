@@ -26,9 +26,29 @@ function isAuthError(err: unknown): boolean {
   if (err instanceof StreamableHTTPError && err.code === 401) return true;
   if (err instanceof Error) {
     const msg = err.message.toLowerCase();
-    if (msg.includes("unauthorized") && !msg.includes("unexpected token")) return true;
+    if (
+      (msg.includes("unauthorized") || msg.includes("401")) &&
+      !msg.includes("unexpected token")
+    ) {
+      return true;
+    }
   }
   return false;
+}
+
+function listTools(response: { tools?: Array<{ name: string; description?: string; inputSchema: unknown }> }): DiscoveredTool[] {
+  return (response.tools ?? []).map((tool) => {
+    const estimate = estimateToolTokens(
+      tool.description ?? "",
+      tool.inputSchema as Record<string, unknown>,
+    );
+    return {
+      name: tool.name,
+      description: tool.description ?? "",
+      input_schema: tool.inputSchema as Record<string, unknown>,
+      token_estimate: estimate,
+    };
+  });
 }
 
 export async function scanServer(
@@ -44,68 +64,64 @@ export async function scanServer(
   const client = new Client({ name: "agentctl", version: "0.1.0" });
 
   try {
-    // Set up OAuth provider and start callback server before connect.
-    // The callback server must be listening before the browser redirect arrives.
-    if (transport === "http" && config.oauth) {
-      // Non-interactive environment: skip OAuth, report diagnostic
-      if (!process.stdout.isTTY) {
-        throw new Error(
-          "OAuth authorization required but running in non-interactive mode. " +
-          "Use headers with a Bearer token, or run interactively to complete OAuth.",
-        );
-      }
+    const hasStaticAuth = config.headers && Object.keys(config.headers).some(
+      (k) => k.toLowerCase() === "authorization",
+    );
 
+    // For HTTP servers: always set up OAuth provider unless static auth headers
+    // are provided. This matches Claude Code's behavior — all remote servers
+    // get OAuth support by default. The provider is passed to the transport so
+    // the SDK can handle 401 responses internally.
+    if (transport === "http" && !hasStaticAuth) {
       oauthProvider = new CliOAuthClientProvider(config.url!);
-      // Start the callback server so the redirect URL port is assigned
-      // before the SDK calls redirectToAuthorization().
       await oauthProvider.startCallbackServer();
     }
 
     const clientTransport = createTransport(config, transport, oauthProvider);
 
-    // First attempt — the SDK will internally:
-    // 1. Send a request to the MCP endpoint
-    // 2. On 401, call auth() → redirectToAuthorization() (opens browser) → return 'REDIRECT'
-    // 3. Throw UnauthorizedError because result !== 'AUTHORIZED'
-    // We catch that, wait for the browser callback, finishAuth, and retry.
+    // Attempt connection. The SDK will internally:
+    // 1. POST to the MCP endpoint
+    // 2. On 401 + authProvider: call auth() → discover OAuth metadata →
+    //    redirectToAuthorization() (opens browser) → return 'REDIRECT'
+    // 3. Throw UnauthorizedError (result !== 'AUTHORIZED')
+    //
+    // If auth() itself fails (e.g., server doesn't support RFC 9728 discovery),
+    // a StreamableHTTPError or other error is thrown instead.
+    //
+    // In either case, we catch auth-related errors, wait for the browser
+    // callback, call finishAuth(), and retry with a fresh transport.
     try {
       await withTimeout(client.connect(clientTransport), timeoutMs);
     } catch (err) {
       if (isAuthError(err) && oauthProvider) {
+        if (!process.stdout.isTTY) {
+          throw new Error(
+            "OAuth authorization required but running in non-interactive mode. " +
+            "Use headers with a Bearer token, or run interactively to complete OAuth.",
+          );
+        }
+
         console.error(`\n  Waiting for OAuth authorization for "${name}"...`);
         console.error("  Complete the authorization in your browser.\n");
 
         const code = await withTimeout(oauthProvider.waitForAuthCode(), OAUTH_TIMEOUT_MS);
 
+        // Exchange the authorization code for tokens
         if (clientTransport instanceof StreamableHTTPClientTransport) {
           await clientTransport.finishAuth(code);
         }
 
-        // Retry connection after auth completes
+        // Retry with a fresh client+transport (original state is invalidated)
         const retryClient = new Client({ name: "agentctl", version: "0.1.0" });
         const retryTransport = createTransport(config, transport, oauthProvider);
         await withTimeout(retryClient.connect(retryTransport), timeoutMs);
-        // Use the retry client for tool listing
+
         const response = await withTimeout(retryClient.listTools(), timeoutMs);
-
-        const tools: DiscoveredTool[] = (response.tools ?? []).map((tool) => {
-          const estimate = estimateToolTokens(
-            tool.description ?? "",
-            tool.inputSchema as Record<string, unknown>,
-          );
-          return {
-            name: tool.name,
-            description: tool.description ?? "",
-            input_schema: tool.inputSchema as Record<string, unknown>,
-            token_estimate: estimate,
-          };
-        });
-
         return {
           server: name,
           status: "ok",
           transport,
-          tools,
+          tools: listTools(response),
           latency_ms: Date.now() - start,
           diagnostics,
         };
@@ -115,24 +131,11 @@ export async function scanServer(
 
     const response = await withTimeout(client.listTools(), timeoutMs);
 
-    const tools: DiscoveredTool[] = (response.tools ?? []).map((tool) => {
-      const estimate = estimateToolTokens(
-        tool.description ?? "",
-        tool.inputSchema as Record<string, unknown>,
-      );
-      return {
-        name: tool.name,
-        description: tool.description ?? "",
-        input_schema: tool.inputSchema as Record<string, unknown>,
-        token_estimate: estimate,
-      };
-    });
-
     return {
       server: name,
       status: "ok",
       transport,
-      tools,
+      tools: listTools(response),
       latency_ms: Date.now() - start,
       diagnostics,
     };

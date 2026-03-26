@@ -50,10 +50,12 @@ export function registerDoctorCommand(program: Command): void {
       let inputs;
       try {
         inputs = await discoverInputs(opts.config);
+        const serverCount = Object.keys(inputs.config.mcpServers).length;
+        const sourceList = inputs.config_sources.join(", ");
         checks.push({
           name: "MCP config",
           status: "pass",
-          message: `Found at ${inputs.config_path}`,
+          message: `${serverCount} server(s) from ${sourceList}`,
         });
       } catch (err) {
         checks.push({
