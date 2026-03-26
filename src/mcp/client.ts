@@ -1,7 +1,10 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import {
+  StreamableHTTPClientTransport,
+  StreamableHTTPError,
+} from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
   McpServerConfig,
@@ -17,6 +20,17 @@ import { CliOAuthClientProvider } from "./oauth.js";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const OAUTH_TIMEOUT_MS = 120_000;
 
+/** Check if an error indicates OAuth authorization is needed. */
+function isAuthError(err: unknown): boolean {
+  if (err instanceof UnauthorizedError) return true;
+  if (err instanceof StreamableHTTPError && err.code === 401) return true;
+  if (err instanceof Error) {
+    const msg = err.message.toLowerCase();
+    if (msg.includes("unauthorized") && !msg.includes("unexpected token")) return true;
+  }
+  return false;
+}
+
 export async function scanServer(
   name: string,
   config: McpServerConfig,
@@ -30,38 +44,73 @@ export async function scanServer(
   const client = new Client({ name: "agentctl", version: "0.1.0" });
 
   try {
-    // Set up OAuth provider if needed
+    // Set up OAuth provider and start callback server before connect.
+    // The callback server must be listening before the browser redirect arrives.
     if (transport === "http" && config.oauth) {
+      // Non-interactive environment: skip OAuth, report diagnostic
+      if (!process.stdout.isTTY) {
+        throw new Error(
+          "OAuth authorization required but running in non-interactive mode. " +
+          "Use headers with a Bearer token, or run interactively to complete OAuth.",
+        );
+      }
+
       oauthProvider = new CliOAuthClientProvider(config.url!);
+      // Start the callback server so the redirect URL port is assigned
+      // before the SDK calls redirectToAuthorization().
+      await oauthProvider.startCallbackServer();
     }
 
     const clientTransport = createTransport(config, transport, oauthProvider);
 
-    // Attempt connection — handle OAuth redirect if needed
+    // First attempt — the SDK will internally:
+    // 1. Send a request to the MCP endpoint
+    // 2. On 401, call auth() → redirectToAuthorization() (opens browser) → return 'REDIRECT'
+    // 3. Throw UnauthorizedError because result !== 'AUTHORIZED'
+    // We catch that, wait for the browser callback, finishAuth, and retry.
     try {
       await withTimeout(client.connect(clientTransport), timeoutMs);
     } catch (err) {
-      if (err instanceof UnauthorizedError && oauthProvider) {
-        // Non-interactive environment: report rather than hang
-        if (!process.stdout.isTTY) {
-          throw new Error(
-            "OAuth authorization required but running in non-interactive mode. " +
-            "Use headers with a Bearer token, or run interactively to complete OAuth.",
-          );
-        }
-
+      if (isAuthError(err) && oauthProvider) {
         console.error(`\n  Waiting for OAuth authorization for "${name}"...`);
+        console.error("  Complete the authorization in your browser.\n");
+
         const code = await withTimeout(oauthProvider.waitForAuthCode(), OAUTH_TIMEOUT_MS);
 
         if (clientTransport instanceof StreamableHTTPClientTransport) {
           await clientTransport.finishAuth(code);
         }
 
-        // Retry connection after auth
-        await withTimeout(client.connect(clientTransport), timeoutMs);
-      } else {
-        throw err;
+        // Retry connection after auth completes
+        const retryClient = new Client({ name: "agentctl", version: "0.1.0" });
+        const retryTransport = createTransport(config, transport, oauthProvider);
+        await withTimeout(retryClient.connect(retryTransport), timeoutMs);
+        // Use the retry client for tool listing
+        const response = await withTimeout(retryClient.listTools(), timeoutMs);
+
+        const tools: DiscoveredTool[] = (response.tools ?? []).map((tool) => {
+          const estimate = estimateToolTokens(
+            tool.description ?? "",
+            tool.inputSchema as Record<string, unknown>,
+          );
+          return {
+            name: tool.name,
+            description: tool.description ?? "",
+            input_schema: tool.inputSchema as Record<string, unknown>,
+            token_estimate: estimate,
+          };
+        });
+
+        return {
+          server: name,
+          status: "ok",
+          transport,
+          tools,
+          latency_ms: Date.now() - start,
+          diagnostics,
+        };
       }
+      throw err;
     }
 
     const response = await withTimeout(client.listTools(), timeoutMs);
@@ -187,6 +236,7 @@ export function classifyError(
   err: unknown,
 ): Diagnostic["type"] {
   if (err instanceof UnauthorizedError) return "oauth_required";
+  if (err instanceof StreamableHTTPError && err.code === 401) return "oauth_required";
 
   const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();

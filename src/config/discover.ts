@@ -68,7 +68,11 @@ function findPromptFiles(): string[] {
 }
 
 function findSkillDirs(): string[] {
-  const candidates = ["skills", ".skills"];
+  const candidates = [
+    "skills",
+    ".skills",
+    join(".claude", "skills"),
+  ];
   return candidates.filter((d) => existsSync(resolve(d)));
 }
 
