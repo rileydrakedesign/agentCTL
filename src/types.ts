@@ -5,6 +5,9 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  type?: "stdio" | "sse" | "http";
+  headers?: Record<string, string>;
+  oauth?: boolean;
 }
 
 export interface McpConfig {
@@ -42,11 +45,11 @@ export interface DiscoveredTool {
 }
 
 export type ServerStatus = "ok" | "error";
-export type Transport = "stdio" | "sse";
+export type Transport = "stdio" | "sse" | "http";
 
 export interface Diagnostic {
   server: string;
-  type: "auth_failure" | "connectivity_failure" | "timeout" | "parse_error";
+  type: "auth_failure" | "connectivity_failure" | "timeout" | "parse_error" | "oauth_required";
   message: string;
 }
 

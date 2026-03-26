@@ -5,6 +5,9 @@ export const mcpServerConfigSchema = z.object({
   args: z.array(z.string()).optional(),
   env: z.record(z.string()).optional(),
   url: z.string().optional(),
+  type: z.enum(["stdio", "sse", "http"]).optional(),
+  headers: z.record(z.string()).optional(),
+  oauth: z.boolean().optional(),
 });
 
 export const mcpConfigSchema = z.object({

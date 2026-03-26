@@ -71,3 +71,21 @@ function findSkillDirs(): string[] {
   const candidates = ["skills", ".skills"];
   return candidates.filter((d) => existsSync(resolve(d)));
 }
+
+/** Resolve environment variable references ($VAR or ${VAR}) in header values. */
+export function resolveHeaders(
+  headers: Record<string, string>,
+): Record<string, string> {
+  const resolved: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    resolved[key] = value.replace(/\$\{([^}]+)\}|\$([A-Z_][A-Z0-9_]*)/gi, (_, braced, bare) => {
+      const envName = braced ?? bare;
+      const envVal = process.env[envName];
+      if (envVal === undefined) {
+        throw new Error(`Environment variable ${envName} referenced in header "${key}" is not set`);
+      }
+      return envVal;
+    });
+  }
+  return resolved;
+}

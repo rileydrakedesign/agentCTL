@@ -1,6 +1,8 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import type {
   McpServerConfig,
   ServerScanResult,
@@ -9,8 +11,11 @@ import type {
   Transport,
 } from "../types.js";
 import { estimateToolTokens } from "../tokens/tokenizer.js";
+import { resolveHeaders } from "../config/discover.js";
+import { CliOAuthClientProvider } from "./oauth.js";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const OAUTH_TIMEOUT_MS = 120_000;
 
 export async function scanServer(
   name: string,
@@ -20,13 +25,44 @@ export async function scanServer(
   const start = Date.now();
   const transport = resolveTransport(config);
   const diagnostics: Diagnostic[] = [];
+  let oauthProvider: CliOAuthClientProvider | undefined;
 
   const client = new Client({ name: "agentctl", version: "0.1.0" });
 
   try {
-    const clientTransport = createTransport(config, transport);
+    // Set up OAuth provider if needed
+    if (transport === "http" && config.oauth) {
+      oauthProvider = new CliOAuthClientProvider(config.url!);
+    }
 
-    await withTimeout(client.connect(clientTransport), timeoutMs);
+    const clientTransport = createTransport(config, transport, oauthProvider);
+
+    // Attempt connection — handle OAuth redirect if needed
+    try {
+      await withTimeout(client.connect(clientTransport), timeoutMs);
+    } catch (err) {
+      if (err instanceof UnauthorizedError && oauthProvider) {
+        // Non-interactive environment: report rather than hang
+        if (!process.stdout.isTTY) {
+          throw new Error(
+            "OAuth authorization required but running in non-interactive mode. " +
+            "Use headers with a Bearer token, or run interactively to complete OAuth.",
+          );
+        }
+
+        console.error(`\n  Waiting for OAuth authorization for "${name}"...`);
+        const code = await withTimeout(oauthProvider.waitForAuthCode(), OAUTH_TIMEOUT_MS);
+
+        if (clientTransport instanceof StreamableHTTPClientTransport) {
+          await clientTransport.finishAuth(code);
+        }
+
+        // Retry connection after auth
+        await withTimeout(client.connect(clientTransport), timeoutMs);
+      } else {
+        throw err;
+      }
+    }
 
     const response = await withTimeout(client.listTools(), timeoutMs);
 
@@ -53,7 +89,7 @@ export async function scanServer(
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const type = classifyError(message);
+    const type = classifyError(err);
 
     diagnostics.push({ server: name, type, message });
 
@@ -66,6 +102,7 @@ export async function scanServer(
       diagnostics,
     };
   } finally {
+    await oauthProvider?.dispose();
     try {
       await client.close();
     } catch {
@@ -74,14 +111,21 @@ export async function scanServer(
   }
 }
 
-function resolveTransport(config: McpServerConfig): Transport {
-  return config.url ? "sse" : "stdio";
+export function resolveTransport(config: McpServerConfig): Transport {
+  if (config.type) return config.type;
+  if (config.url) return "http";
+  return "stdio";
 }
 
 function createTransport(
   config: McpServerConfig,
   transport: Transport,
-): StdioClientTransport | SSEClientTransport {
+  oauthProvider?: CliOAuthClientProvider,
+): StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport {
+  if (transport === "http") {
+    return createHttpTransport(config, oauthProvider);
+  }
+
   if (transport === "sse") {
     return new SSEClientTransport(new URL(config.url!));
   }
@@ -97,6 +141,27 @@ function createTransport(
       ? { ...process.env, ...config.env } as Record<string, string>
       : undefined,
   });
+}
+
+function createHttpTransport(
+  config: McpServerConfig,
+  oauthProvider?: CliOAuthClientProvider,
+): StreamableHTTPClientTransport {
+  const url = new URL(config.url!);
+  const opts: ConstructorParameters<typeof StreamableHTTPClientTransport>[1] = {};
+
+  // Static headers (e.g., Bearer token for CI)
+  if (config.headers) {
+    const resolved = resolveHeaders(config.headers);
+    opts.requestInit = { headers: resolved };
+  }
+
+  // OAuth provider for interactive auth
+  if (oauthProvider) {
+    opts.authProvider = oauthProvider;
+  }
+
+  return new StreamableHTTPClientTransport(url, opts);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -117,16 +182,22 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   });
 }
 
-/** Classify an error message into a diagnostic type. */
+/** Classify an error into a diagnostic type. */
 export function classifyError(
-  message: string,
+  err: unknown,
 ): Diagnostic["type"] {
+  if (err instanceof UnauthorizedError) return "oauth_required";
+
+  const message = err instanceof Error ? err.message : String(err);
   const lower = message.toLowerCase();
 
   // Timeout
   if (lower.includes("timeout") || lower.includes("timed out")) return "timeout";
 
-  // Auth — match HTTP status codes and auth-specific terms, avoid false-positive on "token" alone
+  // OAuth-specific
+  if (lower.includes("oauth")) return "oauth_required";
+
+  // Auth — match HTTP status codes and auth-specific terms
   if (
     lower.includes("401") ||
     lower.includes("403") ||
