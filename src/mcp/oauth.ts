@@ -177,16 +177,14 @@ export class CliOAuthClientProvider implements OAuthClientProvider {
   }
 
   /**
-   * Start a localhost callback server and return a promise that resolves with the auth code.
-   * The server listens on a random port and waits for the OAuth redirect.
+   * Start the localhost callback server so the redirect URL port is assigned.
+   * Call this before connect() so the SDK gets the real port in redirectUrl.
+   * Returns a promise that resolves once the server is listening.
    */
-  waitForAuthCode(): Promise<string> {
-    if (this._authCodePromise) return this._authCodePromise;
+  startCallbackServer(): Promise<void> {
+    if (this._callbackServer) return Promise.resolve();
 
-    this._authCodePromise = new Promise<string>((resolve, reject) => {
-      this._authCodeResolve = resolve;
-      this._authCodeReject = reject;
-
+    return new Promise<void>((resolve) => {
       const server = createServer((req, res) => {
         const url = new URL(req.url ?? "/", `http://127.0.0.1`);
         if (url.pathname !== "/oauth/callback") {
@@ -222,7 +220,21 @@ export class CliOAuthClientProvider implements OAuthClientProvider {
           this._callbackPort = addr.port;
         }
         this._callbackServer = server;
+        resolve();
       });
+    });
+  }
+
+  /**
+   * Wait for the OAuth auth code from the callback server.
+   * startCallbackServer() must be called first.
+   */
+  waitForAuthCode(): Promise<string> {
+    if (this._authCodePromise) return this._authCodePromise;
+
+    this._authCodePromise = new Promise<string>((resolve, reject) => {
+      this._authCodeResolve = resolve;
+      this._authCodeReject = reject;
 
       // Timeout
       setTimeout(() => {

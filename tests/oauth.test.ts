@@ -63,10 +63,8 @@ describe("CliOAuthClientProvider", () => {
 
   it("callback server receives auth code", async () => {
     provider = new CliOAuthClientProvider(testUrl);
+    await provider.startCallbackServer();
     const codePromise = provider.waitForAuthCode();
-
-    // Wait for server to be ready
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const redirectUrl = provider.redirectUrl;
     const url = new URL(typeof redirectUrl === "string" ? redirectUrl : redirectUrl.toString());
@@ -91,12 +89,11 @@ describe("CliOAuthClientProvider", () => {
 
   it("callback server rejects on OAuth error", async () => {
     provider = new CliOAuthClientProvider(testUrl);
+    await provider.startCallbackServer();
     const codePromise = provider.waitForAuthCode();
 
     // Attach a catch handler immediately to prevent unhandled rejection
     codePromise.catch(() => {});
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
 
     const redirectUrl = provider.redirectUrl;
     const url = new URL(typeof redirectUrl === "string" ? redirectUrl : redirectUrl.toString());
