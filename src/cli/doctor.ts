@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 import chalk from "chalk";
 import ora from "ora";
 import type { Command } from "commander";
-import { discoverInputs } from "../config/discover.js";
+import { discoverInputs, resolveHeaders } from "../config/discover.js";
 import { loadProjectConfig } from "../config/parse.js";
 import { scanServer } from "../mcp/client.js";
+import { hasOAuthTokens } from "../mcp/oauth.js";
 
 interface Check {
   name: string;
@@ -84,7 +85,42 @@ export function registerDoctorCommand(program: Command): void {
         }
       }
 
-      // 4. MCP server connectivity (parallel)
+      // 4. OAuth token cache & header checks
+      for (const [name, serverConfig] of Object.entries(inputs.config.mcpServers)) {
+        if (serverConfig.oauth && serverConfig.url) {
+          if (hasOAuthTokens(serverConfig.url)) {
+            checks.push({
+              name: `oauth: ${name}`,
+              status: "pass",
+              message: "Cached tokens found",
+            });
+          } else {
+            checks.push({
+              name: `oauth: ${name}`,
+              status: "warn",
+              message: "No cached tokens — run `agentctl scan` to authorize",
+            });
+          }
+        }
+        if (serverConfig.headers) {
+          try {
+            resolveHeaders(serverConfig.headers);
+            checks.push({
+              name: `headers: ${name}`,
+              status: "pass",
+              message: "All header env vars resolved",
+            });
+          } catch (err) {
+            checks.push({
+              name: `headers: ${name}`,
+              status: "warn",
+              message: (err as Error).message,
+            });
+          }
+        }
+      }
+
+      // 5. MCP server connectivity (parallel)
       const serverNames = Object.keys(inputs.config.mcpServers);
       const spinner = ora(
         `Checking ${serverNames.length} MCP server${serverNames.length !== 1 ? "s" : ""}...`,
@@ -125,7 +161,7 @@ export function registerDoctorCommand(program: Command): void {
         }
       }
 
-      // 5. Prompt files
+      // 6. Prompt files
       for (const file of inputs.prompt_files) {
         checks.push({
           name: `prompt: ${file}`,
@@ -134,7 +170,7 @@ export function registerDoctorCommand(program: Command): void {
         });
       }
 
-      // 6. Skill directories
+      // 7. Skill directories
       for (const dir of inputs.skill_dirs) {
         checks.push({
           name: `skills: ${dir}`,
