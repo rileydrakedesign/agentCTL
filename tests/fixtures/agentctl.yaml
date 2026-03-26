@@ -1,0 +1,8 @@
+version: 1
+project:
+  name: test-project
+runtime_targets:
+  - model: claude-sonnet-4-6
+    context_window: 200000
+  - model: gpt-4o
+    context_window: 128000

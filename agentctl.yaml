@@ -1,0 +1,6 @@
+version: 1
+project:
+  name: agentctl
+runtime_targets:
+  - model: claude-sonnet-4-6
+    context_window: 200000
