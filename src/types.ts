@@ -142,6 +142,57 @@ export interface WorkspaceMetrics {
   warnings: string[];
 }
 
+// ── Diff ───────────────────────────────────────────────
+
+export interface NumericDelta {
+  base: number;
+  head: number;
+  delta: number;
+  delta_pct: number;
+}
+
+export interface ServerDelta {
+  name: string;
+  tools_delta: number;
+  tokens_delta: number;
+  tools_added: string[];
+  tools_removed: string[];
+}
+
+export interface DiffReport {
+  version: number;
+  timestamp: string;
+  base_ref: string;
+  head_ref: string;
+  servers: {
+    added: Array<{ name: string; tools: number; tokens: number }>;
+    removed: Array<{ name: string; tools: number; tokens: number }>;
+    changed: ServerDelta[];
+  };
+  budgets: {
+    discovery_tokens: NumericDelta;
+    prompt_tokens: NumericDelta;
+    total_typical: NumericDelta;
+    total_worst_case: NumericDelta;
+  };
+  analysis: {
+    redundancy_new: RedundancyCluster[];
+    redundancy_resolved: RedundancyCluster[];
+    waste_pct: NumericDelta;
+  };
+  model_fit: Array<{
+    model: string;
+    base_typical_pct: number;
+    head_typical_pct: number;
+    base_fits: boolean;
+    head_fits: boolean;
+  }>;
+  exit_result?: {
+    pass: boolean;
+    rules_evaluated: string[];
+  };
+}
+
 // ── Plan Report ─────────────────────────────────────────────
 
 export type PlanStatus = "success" | "partial" | "failed";
@@ -167,4 +218,35 @@ export interface PlanReport {
   analysis: Analysis;
   recommendations: string[];
   diagnostics: Diagnostic[];
+}
+
+// ── Optimize ───────────────────────────────────────────
+
+export type OptimizeActionType = "remove_dead_server" | "remove_redundant_server";
+
+export interface OptimizeAction {
+  type: OptimizeActionType;
+  server: string;
+  rationale: string;
+  token_savings: number;
+}
+
+export interface ManualFinding {
+  server: string;
+  tool: string;
+  issue: "dead_tool" | "partial_redundancy";
+  detail: string;
+}
+
+export interface OptimizeResult {
+  version: 1;
+  timestamp: string;
+  config_path: string;
+  actions: OptimizeAction[];
+  manual_findings: ManualFinding[];
+  servers_before: string[];
+  servers_after: string[];
+  total_token_savings: number;
+  applied: boolean;
+  backup_path: string | null;
 }
