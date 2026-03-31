@@ -98,7 +98,7 @@ function computeServerDiff(basePlan: PlanReport, headPlan: PlanReport) {
   return { added, removed, changed };
 }
 
-function toolsByServer(plan: PlanReport): Map<string, string[]> {
+function toolsByServer(_plan: PlanReport): Map<string, string[]> {
   const result = new Map<string, string[]>();
   // Reconstruct from the scan data embedded in the plan
   // The plan doesn't store raw scan servers, but we can infer tool names
