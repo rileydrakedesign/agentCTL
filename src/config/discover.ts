@@ -1,9 +1,10 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { readFile, readdir } from "node:fs/promises";
+import { join, resolve, relative } from "node:path";
 import { homedir } from "node:os";
-import type { McpConfig, McpServerConfig } from "../types.js";
+import type { McpConfig, McpServerConfig, InstructionFile } from "../types.js";
 import { mcpConfigSchema, mcpServerConfigSchema } from "./schemas.js";
+import { countTokens } from "../tokens/tokenizer.js";
 
 /** Paths to check for .mcp.json-style project config. */
 const PROJECT_CONFIG_PATHS = [
@@ -216,6 +217,137 @@ function findSkillDirs(): string[] {
     join(".claude", "skills"),
   ];
   return candidates.filter((d) => existsSync(resolve(d)));
+}
+
+// ── Instruction file discovery ──────────────────────────
+
+/** Known instruction file names used in agentic projects. */
+const INSTRUCTION_NAMES = new Set([
+  "claude.md",
+  "agents.md",
+  "instructions.md",
+  "system.md",
+  "prompt.md",
+  "agent.md",
+]);
+
+/** Directories to skip during recursive discovery. */
+const SKIP_DIRS = new Set([
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  "coverage",
+  ".agentctl",
+  ".next",
+  "__pycache__",
+  ".venv",
+  "vendor",
+]);
+
+/**
+ * Recursively discover instruction .md files in the project tree.
+ * Looks for known instruction filenames (CLAUDE.md, AGENTS.md, etc.)
+ * as well as any .md files inside .claude/ directories.
+ */
+export async function discoverInstructionFiles(
+  root: string = process.cwd(),
+  maxDepth: number = 6,
+): Promise<InstructionFile[]> {
+  const results: InstructionFile[] = [];
+  const absRoot = resolve(root);
+
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > maxDepth) return;
+
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+      const relPath = relative(absRoot, fullPath);
+
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+
+        // .claude/ directory — scan for any .md files inside
+        if (entry.name === ".claude") {
+          await scanClaudeDir(fullPath, absRoot, depth + 1, results);
+          continue;
+        }
+
+        await walk(fullPath, depth + 1);
+        continue;
+      }
+
+      if (!entry.isFile()) continue;
+      const lower = entry.name.toLowerCase();
+
+      // Match known instruction file names at any depth
+      if (INSTRUCTION_NAMES.has(lower)) {
+        const content = await safeRead(fullPath);
+        if (content === null) continue;
+
+        results.push({
+          path: relPath,
+          depth,
+          token_count: countTokens(content),
+          scope: depth === 0 ? "root" : "nested",
+        });
+      }
+    }
+  }
+
+  await walk(absRoot, 0);
+  return results;
+}
+
+/** Scan a .claude/ directory for all .md files. */
+async function scanClaudeDir(
+  dir: string,
+  root: string,
+  depth: number,
+  results: InstructionFile[],
+): Promise<void> {
+  let entries;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = join(dir, entry.name);
+    const relPath = relative(root, fullPath);
+
+    if (entry.isFile() && entry.name.toLowerCase().endsWith(".md")) {
+      const content = await safeRead(fullPath);
+      if (content === null) continue;
+
+      results.push({
+        path: relPath,
+        depth,
+        token_count: countTokens(content),
+        scope: "claude-dir",
+      });
+    }
+
+    if (entry.isDirectory() && !SKIP_DIRS.has(entry.name)) {
+      await scanClaudeDir(fullPath, root, depth + 1, results);
+    }
+  }
+}
+
+async function safeRead(path: string): Promise<string | null> {
+  try {
+    return await readFile(path, "utf-8");
+  } catch {
+    return null;
+  }
 }
 
 /** Resolve environment variable references ($VAR or ${VAR}) in header values. */
