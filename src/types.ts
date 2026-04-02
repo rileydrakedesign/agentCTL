@@ -220,6 +220,56 @@ export interface PlanReport {
   diagnostics: Diagnostic[];
 }
 
+// ── Agentic Workspace ──────────────────────────────────
+
+export interface InstructionFile {
+  path: string;
+  depth: number;
+  token_count: number;
+  scope: "root" | "nested" | "claude-dir";
+}
+
+export interface SkillEntry {
+  name: string;
+  path: string;
+  token_count: number;
+  has_instruction: boolean;
+}
+
+export interface McpEntry {
+  name: string;
+  source: string;
+  transport: Transport;
+  tool_count: number;
+  token_cost: number;
+}
+
+export interface AgenticNode {
+  type: "instruction" | "skill" | "mcp-config" | "skill-dir" | "claude-dir";
+  path: string;
+  label: string;
+  children?: AgenticNode[];
+  meta?: Record<string, string | number>;
+}
+
+export interface AgenticWorkspaceView {
+  root: string;
+  instruction_files: InstructionFile[];
+  skills: SkillEntry[];
+  mcp_servers: McpEntry[];
+  tree: AgenticNode[];
+  summary: {
+    total_instruction_files: number;
+    total_instruction_tokens: number;
+    total_skills: number;
+    total_skill_tokens: number;
+    total_mcp_servers: number;
+    total_mcp_tools: number;
+    total_mcp_tokens: number;
+    deepest_instruction_depth: number;
+  };
+}
+
 // ── Optimize ───────────────────────────────────────────
 
 export type OptimizeActionType = "remove_dead_server" | "remove_redundant_server";
