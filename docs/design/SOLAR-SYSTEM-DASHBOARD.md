@@ -132,6 +132,10 @@ for the full reference detection system, including:
 - Confidence scoring per reference type
 - The `ReferenceGraph` and `ConnectivityStatus` type definitions
 - Lat annotation format specification
+- **Contradiction detection** — conflicting directives across instruction files
+  (distinct from redundancy, which detects sameness between MCP tools)
+- **Staleness detection** — dead globs, missing references, drifted directives
+  (extends dead-caps detection, which focuses on MCP tool schemas)
 
 ### Visual Treatment
 
@@ -164,10 +168,14 @@ Arcs appear **on interaction**, not all at once:
 | Semantic match (high confidence) | Dashed line, confidence % tooltip |
 | Semantic match (low confidence) | Faint dotted line, "show all" mode only |
 | Broken reference (target missing) | Red broken line with warning icon |
+| Contradiction (hard conflict) | Red crackling "lightning" arc between conflicting moons |
+| Contradiction (scope override) | Amber directional arc (child overriding parent) |
+| Stale reference | Arc with crumbling/dissolving particles — decaying in place |
 
 **Chain visualization:** Click a deeply-linked object → the full chain lights up:
 planet surface → moon A → moon B → this moon. Click an unlinked object → the
-system shows why it's unlinked (no arcs connect to it).
+system shows why it's unlinked (no arcs connect to it). Click a contradiction arc
+→ inspect panel shows both directives side-by-side with the conflict highlighted.
 
 ---
 
@@ -274,8 +282,10 @@ When any object is clicked, a side panel slides in showing:
 │                    agentctl (OSS Core)                       │
 │                                                             │
 │  CLI: scan, plan, doctor, diff, optimize, workspace         │
-│  Analysis: redundancy, dead caps, pressure                  │
+│  Analysis: redundancy, dead caps, pressure (existing)       │
 │  Analysis: reference graph (structural + semantic) [NEW]    │
+│  Analysis: contradiction detection (instruction conflicts)  │
+│  Analysis: staleness detection (dead globs, drift) [NEW]    │
 │  Analysis: context surface builder [NEW]                    │
 │  MCP Client: stdio, SSE, HTTP, OAuth                        │
 │  Token Budgeting: per-model context estimation              │

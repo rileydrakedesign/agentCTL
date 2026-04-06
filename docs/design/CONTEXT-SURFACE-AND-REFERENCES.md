@@ -6,15 +6,25 @@
 
 ## Overview
 
-This document specifies two new core systems for agentctl:
+This document specifies new core systems for agentctl:
 
 1. **Context Surface Model** — a platform-aware representation of everything
    visible to an AI agent at session start
 2. **Reference Graph** — a three-layer system for detecting and classifying
    relationships between agentic infrastructure components
+3. **Contradiction Detection** — analysis of conflicting directives across
+   instruction files (distinct from redundancy detection, which finds sameness)
+4. **Staleness Detection** — identification of references and directives that
+   have drifted from the current state of the project
 
 These systems power both the CLI (connectivity analysis, CI gates) and the
 dashboard (planet rendering, reference arc visualization).
+
+**Inspiration:** The reference graph and lattice concepts share DNA with
+Karpathy's [LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)
+pattern — the idea that connections between documents are as valuable as
+the documents themselves, and that the tedious bookkeeping of maintaining
+cross-references is exactly what tooling should automate.
 
 ---
 
@@ -26,10 +36,12 @@ dashboard (planet rendering, reference arc visualization).
 4. [Semantic References](#4-semantic-references)
 5. [Lat Annotations](#5-lat-annotations)
 6. [Reference Detection Pipeline](#6-reference-detection-pipeline)
-7. [Core Types](#7-core-types)
-8. [CLI Integration](#8-cli-integration)
-9. [Dashboard Mapping](#9-dashboard-mapping)
-10. [Open Questions & Future Work](#10-open-questions--future-work)
+7. [Contradiction Detection](#7-contradiction-detection)
+8. [Staleness Detection](#8-staleness-detection)
+9. [Core Types](#9-core-types)
+10. [CLI Integration](#10-cli-integration)
+11. [Dashboard Mapping](#11-dashboard-mapping)
+12. [Open Questions & Future Work](#12-open-questions--future-work)
 
 ---
 
@@ -459,6 +471,36 @@ The workflow:
 5. Structural and semantic detection still run, but lat annotations take
    precedence when they exist
 
+### 5.4.1 The Compounding Lattice
+
+The lattice is a **compounding artifact** — it gets richer and more accurate
+over time through a feedback loop:
+
+```
+Round 1: agentctl discovers files, proposes lattice from structural/semantic
+         detection. Connectivity: 40%. Many uncertain semantic matches.
+
+Round 2: User validates, adds lat annotations for confirmed relationships,
+         rejects false positives. Lat annotations become ground truth.
+         Connectivity: 65%.
+
+Round 3: New files added to project. agentctl proposes additions to lattice.
+         Existing lat annotations improve semantic matching (known entity
+         relationships reduce ambiguity). Connectivity: 78%.
+
+Round N: Lattice is comprehensive. New files are automatically placed in
+         context via existing reference chains. Semantic detection is highly
+         accurate because lat annotations provide rich training signal.
+```
+
+Each round of detection → user validation → annotation makes future detection
+more accurate. The lattice compounds because:
+- Lat annotations provide ground truth that disambiguates semantic matches
+- A well-connected graph has fewer orphans, so new files are more likely to
+  find an existing connection
+- `agentctl lattice diff` shows evolution between git refs, making the
+  compounding visible over time
+
 ### 5.5 Lattice File (Alternative to Inline Annotations)
 
 For projects that prefer a centralized manifest over inline annotations,
@@ -528,8 +570,24 @@ Stage 5: Graph Construction
 │    - Mark each node: linked/unlinked, degree, reference chain
 │  Calculate summary metrics
 │
-Stage 6: Output
-   Write topology.json artifact
+Stage 6: Contradiction Analysis
+│  Extract directives from all instruction files in the graph
+│  Generate topic fingerprints per directive
+│  Pairwise comparison of directives sharing topic fingerprints
+│  Classify: hard_conflict / scope_override / tool_overlap
+│  (See Section 7 for full specification)
+│
+Stage 7: Staleness Analysis
+│  Tier 1: Already covered — broken refs flagged in Stages 2-3
+│  Tier 2: Expand .mdc glob patterns, check for zero matches
+│           Verify skill directory paths exist
+│  Tier 3 (opt-in): Cross-reference directives against codebase
+│           Package mentions vs. package.json
+│           Env var mentions vs. .env.example
+│  (See Section 8 for full specification)
+│
+Stage 8: Output
+   Write topology.json artifact (graph + contradictions + staleness)
    Include in plan report
    Serve to dashboard via API
 ```
@@ -561,9 +619,213 @@ re-detection:
 
 ---
 
-## 7. Core Types
+## 7. Contradiction Detection
 
-### 7.1 Context Surface Types
+Existing analysis modules detect **redundancy** (same thing said twice across MCP
+servers) and **dead capabilities** (broken/empty tools). Contradiction detection
+is a distinct axis: it finds **conflicting directives** across instruction files.
+
+This matters because an agent receiving contradictory instructions behaves
+unpredictably. The conflict may be invisible to the developer because each file
+looks correct in isolation — the problem only emerges when you view the full
+instruction set together.
+
+### 7.1 What Contradictions Look Like
+
+**Direct conflicts** — opposing directives on the same topic:
+
+```
+CLAUDE.md:           "Always use REST APIs for external services"
+src/api/CLAUDE.md:   "Use GraphQL for all API endpoints"
+
+CLAUDE.md:           "Use Jest for all testing"
+.cursor/rules/test.mdc: "Use Vitest for all test files"
+
+CLAUDE.md:           "Never commit directly to main"
+.claude/settings.json:  "Auto-push to main after commit"
+```
+
+**Scope conflicts** — a nested instruction overrides a root instruction without
+acknowledging it:
+
+```
+CLAUDE.md:                "Use TypeScript strict mode everywhere"
+src/legacy/CLAUDE.md:     "Use JavaScript for files in this directory"
+                          (valid override, but is it intentional?)
+```
+
+**Tool conflicts** — instructions reference MCP tools that have overlapping
+capabilities with contradictory usage guidance:
+
+```
+CLAUDE.md:  "Use the filesystem MCP for all file operations"
+CLAUDE.md:  "Use the shell MCP to read and write files"
+```
+
+### 7.2 Detection Strategy
+
+Contradiction detection runs AFTER the reference graph is built, because it
+needs to know which files are in the context surface and how they relate.
+
+**Phase 1: Topic Extraction**
+
+Extract directive-like statements from instruction files. Directives are
+sentences/paragraphs that contain imperative language:
+- "Always/never/use/avoid/prefer/do not..."
+- "When X, do Y"
+- "For X files, use Y"
+- Rule-like patterns with clear prescriptive intent
+
+Each directive gets a **topic fingerprint** — a normalized representation of
+what it's about (e.g., "testing framework", "API style", "file operations").
+
+**Phase 2: Pairwise Comparison**
+
+For directives sharing a similar topic fingerprint, check for conflict:
+- Opposing verbs: "use X" vs. "avoid X", "always" vs. "never"
+- Different values for the same parameter: "use Jest" vs. "use Vitest"
+- Contradictory conditions: same trigger, different prescribed actions
+
+**Phase 3: Scope-Aware Filtering**
+
+Not all conflicts are problems. A nested instruction file is ALLOWED to override
+a root instruction for its scope. The system classifies each conflict:
+
+| Classification | Meaning | Severity |
+|---------------|---------|----------|
+| `hard_conflict` | Same scope level, opposing directives | error |
+| `scope_override` | Nested file overrides parent (possibly intentional) | warning |
+| `tool_overlap` | Multiple tools prescribed for same task | info |
+
+### 7.3 Relationship to Existing Analysis
+
+| Module | Axis | Entities Compared |
+|--------|------|-------------------|
+| `redundancy.ts` | Sameness between MCP **tools** | Tool descriptions across servers |
+| `dead-caps.ts` | Brokenness of MCP **tools** | Individual tool schemas |
+| `pressure.ts` | Budget overrun of **token counts** | Totals vs. context windows |
+| **contradictions** (new) | Conflict between **instructions** | Directive text across .md files |
+
+This is a fundamentally different analysis dimension. Redundancy asks "are two
+tools the same?" Contradiction asks "do two instructions disagree?"
+
+### 7.4 Output Type
+
+```typescript
+type ConflictSeverity = "error" | "warning" | "info";
+type ConflictClass = "hard_conflict" | "scope_override" | "tool_overlap";
+
+interface Contradiction {
+  file_a: string;           // path to first instruction file
+  file_b: string;           // path to second instruction file
+  directive_a: string;      // the conflicting text from file A
+  directive_b: string;      // the conflicting text from file B
+  line_a?: number;
+  line_b?: number;
+  topic: string;            // normalized topic fingerprint
+  classification: ConflictClass;
+  severity: ConflictSeverity;
+  explanation: string;      // human-readable description of the conflict
+}
+```
+
+---
+
+## 8. Staleness Detection
+
+The reference graph's `verified: boolean` flag catches **structural** staleness —
+a wiki link or lat annotation that points to a file that no longer exists. But
+staleness has broader dimensions that the reference graph alone doesn't cover.
+
+Staleness detection extends the reference graph's broken-reference concept into
+instruction-level analysis.
+
+### 8.1 Types of Staleness
+
+**Reference staleness** (already covered by reference graph):
+- A `[[wiki-link]]` pointing to a deleted file
+- A `@lat:uses-mcp github` when the github MCP was removed from `.mcp.json`
+- A `@lat:refs auth-patterns.md` when `auth-patterns.md` was deleted
+
+**Rule staleness** (new):
+- An `.mdc` rules file with a glob pattern that matches zero files
+- A skill directory entry in config that points to a deleted directory
+- A `.cursorrules` referencing a framework/library not in `package.json`
+
+**Directive staleness** (new, harder):
+- An instruction file describing patterns for a framework version that's been
+  upgraded (e.g., "use React class components" when project uses React 18+)
+- References to API endpoints, routes, or database tables that no longer exist
+  in the codebase
+- Environment variable references (`$API_KEY`) where the var is no longer used
+
+### 8.2 Detection Strategy
+
+**Tier 1 — Reference staleness:** Already handled by the reference graph
+pipeline (Stage 3 structural scan + verification). No new work needed.
+
+**Tier 2 — Rule staleness:** Straightforward filesystem checks:
+- Expand .mdc glob patterns → count matching files. Zero matches = stale.
+- Resolve skill directory paths → check existence.
+- Straightforward to implement, high confidence.
+
+**Tier 3 — Directive staleness:** Requires cross-referencing instruction content
+against the actual codebase. This is expensive and lower confidence:
+- Scan instruction files for package/framework name mentions → check `package.json`
+- Scan for file path references → check existence
+- Scan for env var references → check `.env.example` or actual env
+
+Tier 3 is opt-in (`--deep-staleness`) due to cost and false positive risk.
+
+### 8.3 Relationship to Existing Analysis
+
+| Module | What It Detects | Entities Checked |
+|--------|----------------|-----------------|
+| `dead-caps.ts` | Broken/empty **MCP tools** | Tool schemas, descriptions |
+| Reference graph `verified` | Broken **structural links** | File paths, entity names |
+| **Staleness tier 2** (new) | Dead **rules and configs** | Glob patterns, skill dirs |
+| **Staleness tier 3** (new) | Drifted **directive content** | Instructions vs. codebase |
+
+`dead-caps.ts` asks "is this MCP tool broken?" Staleness asks "is this
+instruction/rule/reference still relevant?" Different scope, different entities.
+
+### 8.4 Output Type
+
+```typescript
+type StalenessType =
+  | "broken_reference"       // covered by ref graph (included for completeness)
+  | "dead_glob"              // .mdc glob matches zero files
+  | "missing_skill_dir"      // skill directory doesn't exist
+  | "missing_dependency"     // references package not in package.json
+  | "missing_env_var"        // references env var not in .env.example
+  | "dead_path_reference";   // instruction mentions file path that doesn't exist
+
+interface StaleEntity {
+  source: string;            // file containing the stale reference/directive
+  line_number?: number;
+  staleness_type: StalenessType;
+  stale_target: string;      // what's stale (the glob, the path, the package name)
+  confidence: number;        // 1.0 for filesystem checks, lower for content analysis
+  detail: string;            // human-readable explanation
+  tier: 1 | 2 | 3;          // detection tier
+}
+```
+
+### 8.5 Dashboard Visualization
+
+Stale entities map to visual decay in the solar system:
+
+| Staleness | Visual Treatment |
+|-----------|-----------------|
+| Broken reference (tier 1) | Red broken arc (already specified) |
+| Dead glob / missing dir (tier 2) | Moon/satellite with cracking surface texture |
+| Drifted directive (tier 3) | Faint amber glow on the moon — "aging" indicator |
+
+---
+
+## 9. Core Types
+
+### 9.1 Context Surface Types
 
 ```typescript
 /** Platform profile for context surface discovery. */
@@ -618,7 +880,7 @@ interface ContextSurface {
 }
 ```
 
-### 7.2 Reference Types
+### 9.2 Reference Types
 
 ```typescript
 /** How a reference was detected. */
@@ -646,7 +908,7 @@ interface AgenticReference {
 }
 ```
 
-### 7.3 Graph Types
+### 9.3 Graph Types
 
 ```typescript
 /** Connectivity status of a single node in the reference graph. */
@@ -682,7 +944,7 @@ interface ReferenceGraph {
 }
 ```
 
-### 7.4 Rules File Type (New)
+### 9.4 Rules File Type (New)
 
 ```typescript
 /** A rules file (.mdc, .cursorrules, .windsurfrules). */
@@ -698,36 +960,44 @@ interface RulesFile {
 
 ---
 
-## 8. CLI Integration
+## 10. CLI Integration
 
-### 8.1 New Artifacts
+### 10.1 New Artifacts
 
 | Artifact | Content | When Written |
 |----------|---------|-------------|
 | `surface.json` | ContextSurface for current platform | `plan`, `workspace` |
-| `topology.json` | ReferenceGraph with all edges + nodes | `plan`, `workspace` |
+| `topology.json` | ReferenceGraph + contradictions + staleness | `plan`, `workspace` |
 
-### 8.2 Plan Report Integration
+### 10.2 Plan Report Integration
 
 The plan report gains new sections:
 
 ```typescript
 interface PlanReport {
-  // ... existing fields ...
+  // ... existing fields (capabilities, budgets, runtime_targets,
+  //     workspace, analysis, recommendations, diagnostics) ...
 
-  // NEW
+  // NEW — extends the existing analysis field
   context_surface: ContextSurface;
   reference_graph: {
     connectivity_pct: number;
     linked: number;
     unlinked: number;
     broken_references: number;
-    unlinked_entities: string[];     // names/paths of orphaned objects
+    unlinked_entities: string[];
   };
+  contradictions: Contradiction[];   // from Section 7
+  staleness: StaleEntity[];          // from Section 8
 }
 ```
 
-### 8.3 New CLI Flags
+Note: `contradictions` and `staleness` are **new analysis dimensions** that sit
+alongside the existing `analysis.redundancy_clusters`, `analysis.dead_capabilities`,
+and `analysis.warnings`. They don't replace or overlap with those — see the
+comparison tables in Sections 7.3 and 8.3.
+
+### 10.3 New CLI Flags
 
 ```bash
 # Fail if connectivity drops below threshold
@@ -739,9 +1009,19 @@ agentctl plan --fail-on-unlinked
 # Fail if broken structural references exist
 agentctl plan --fail-on-broken-refs
 
+# Fail if contradictions of a given severity exist
+agentctl plan --fail-on-contradictions          # any hard_conflict
+agentctl plan --fail-on-contradictions warning  # hard_conflict or scope_override
+
+# Fail if tier 1-2 staleness detected
+agentctl plan --fail-on-stale
+
 # Specify platform for context surface analysis
 agentctl plan --platform cursor
 agentctl plan --platform claude-code   # default
+
+# Enable deep staleness (tier 3 — cross-references against codebase)
+agentctl plan --deep-staleness
 
 # Show reference graph in workspace command
 agentctl workspace --refs
@@ -751,9 +1031,10 @@ agentctl workspace --refs --semantic    # include semantic refs
 agentctl lattice generate              # propose annotations
 agentctl lattice generate --apply      # write into files
 agentctl lattice validate              # check existing annotations
+agentctl lattice diff                  # show changes since last generation
 ```
 
-### 8.4 Terminal Output
+### 10.4 Terminal Output
 
 The workspace command with `--refs` shows a reference tree:
 
@@ -776,11 +1057,30 @@ The workspace command with `--refs` shows a reference tree:
     • redis MCP (server, 12 tools, 1,840 tokens)
 ```
 
+The plan report includes contradictions and staleness when detected:
+
+```
+⚡ Contradictions (2 found)
+
+  ✖ HARD CONFLICT: testing framework
+    CLAUDE.md:24        "Use Jest for all testing"
+    .cursor/rules/test.mdc:3  "Use Vitest for all test files"
+
+  ⚠ SCOPE OVERRIDE: language choice
+    CLAUDE.md:8         "Use TypeScript strict mode everywhere"
+    src/legacy/CLAUDE.md:2  "Use JavaScript for files in this directory"
+
+🕰 Stale References (1 found)
+
+  ⚠ .cursor/rules/api.mdc
+    Glob pattern "src/api/v1/**/*.ts" matches 0 files (dead glob)
+```
+
 ---
 
-## 9. Dashboard Mapping
+## 11. Dashboard Mapping
 
-### 9.1 Context Surface → Planet
+### 11.1 Context Surface → Planet
 
 The context surface maps to planet visual properties:
 
@@ -793,7 +1093,7 @@ The context surface maps to planet visual properties:
 | pressure.surface_pct | Atmosphere density |
 | platform | Planet color palette / texture family |
 
-### 9.2 Reference Arcs → Visual Arcs
+### 11.2 Reference Arcs → Visual Arcs
 
 | Reference Property | Arc Visual |
 |-------------------|------------|
@@ -804,7 +1104,7 @@ The context surface maps to planet visual properties:
 | verified: false (broken) | Red, broken/jagged line with warning icon |
 | degrees_from_surface | Arc length / curvature |
 
-### 9.3 Connectivity → Object State
+### 11.3 Connectivity → Object State
 
 | Connectivity | Visual Treatment |
 |-------------|-----------------|
@@ -813,9 +1113,35 @@ The context surface maps to planet visual properties:
 | unlinked | Dim, transparent, wobbling, drifting outward |
 | broken reference source | Pulsing warning glow on the source object |
 
+### 11.4 Contradictions → Visual Conflicts
+
+When contradictions exist between two moons (instruction files), the dashboard
+shows them as a visible tension:
+
+| Contradiction Type | Visual Treatment |
+|-------------------|-----------------|
+| hard_conflict | Red crackling arc between the two moons — "lightning" between them |
+| scope_override | Amber arc with directional arrow (child overriding parent) |
+| tool_overlap | Yellow dotted arc between the moons that reference competing tools |
+
+Clicking a contradiction arc opens the inspect panel showing both directives
+side-by-side with the conflict highlighted.
+
+### 11.5 Staleness → Visual Decay
+
+| Staleness | Visual Treatment |
+|-----------|-----------------|
+| Broken reference (tier 1) | Red broken arc (same as unverified reference) |
+| Dead glob / missing dir (tier 2) | Moon with cracking/crumbling surface texture |
+| Drifted directive (tier 3) | Faint amber glow — the moon is "aging" |
+
+Stale objects don't drift outward like unlinked objects (they ARE linked, just
+to something that no longer exists). Instead they show material degradation —
+they're eroding in place.
+
 ---
 
-## 10. Open Questions & Future Work
+## 12. Open Questions & Future Work
 
 ### Detection Quality
 
@@ -854,12 +1180,45 @@ The context surface maps to planet visual properties:
    what each platform injects. This may require testing against actual IDE
    behavior, not just documentation.
 
+### Contradiction Detection
+
+9. **Directive extraction quality** — Extracting imperative statements from
+   free-form markdown is non-trivial. Start with high-precision patterns
+   (always/never/use/avoid) and expand. False positives are worse than
+   false negatives here.
+
+10. **Intentional overrides** — Scope overrides are sometimes intentional.
+    Consider a `@lat:overrides <path>` annotation that explicitly marks an
+    intentional scope override, suppressing the warning.
+
+11. **Cross-file contradiction at scale** — Pairwise comparison is O(n²) on
+    directives. For large projects, may need topic fingerprint indexing to
+    avoid comparing every pair.
+
+### Staleness
+
+12. **Tier 3 false positives** — Cross-referencing directives against the
+    codebase will produce false positives. Tier 3 must be opt-in and clearly
+    labeled as "suggestions" not "errors."
+
+13. **Staleness vs. intentional legacy** — "Use JavaScript in this directory"
+    might be stale OR it might be an intentional legacy exception. Context
+    matters. This is where the `@lat:deprecated` annotation becomes useful.
+
 ### Scale
 
-9. **Large monorepos** — Projects with 100+ instruction files. The reference
-   graph could become expensive to compute. Consider caching, incremental
-   updates, and a max-depth setting for semantic detection.
+14. **Large monorepos** — Projects with 100+ instruction files. The reference
+    graph could become expensive to compute. Consider caching, incremental
+    updates, and a max-depth setting for semantic detection.
 
-10. **Cross-project references** — In a workspace, can project A's instructions
+15. **Cross-project references** — In a workspace, can project A's instructions
     reference project B's MCP servers? This becomes relevant in Phase 2
     (multi-project workspaces).
+
+### Inspiration & Prior Art
+
+16. **Karpathy's LLM Wiki** — The compounding artifact model, lint-as-health-check
+    pattern, and index/log structure directly influenced the lattice and
+    contradiction detection designs. Key difference: LLM Wiki is for knowledge
+    management; agentctl is for infrastructure management. But the core insight
+    — that cross-references are as valuable as documents — is identical.
