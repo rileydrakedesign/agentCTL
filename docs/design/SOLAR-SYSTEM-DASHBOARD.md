@@ -2,7 +2,7 @@
 
 > Status: Brainstorm / RFC
 > Date: 2026-04-06
-> Revision: 2
+> Revision: 3
 
 ## Vision
 
@@ -15,9 +15,13 @@ data in an interactive 3D visualization, adding workspace management, historical
 tracking, and team collaboration.
 
 The dashboard is **agentic-first** — it visualizes the agentic layer (instructions,
-skills, MCP connections) rather than source code. The codebase itself is implicit;
-the planet's gravity. What you see in orbit is everything that shapes how an AI
-agent understands and operates within that project.
+skills, MCP connections, rules) rather than source code. The codebase itself is
+implicit; the planet's gravity. What you see in orbit is everything that shapes
+how an AI agent understands and operates within that project.
+
+**Companion document:** See [CONTEXT-SURFACE-AND-REFERENCES.md](./CONTEXT-SURFACE-AND-REFERENCES.md)
+for the full specification of the context surface model, reference graph system,
+structural vs. semantic reference detection, and lat annotation format.
 
 ---
 
@@ -34,22 +38,41 @@ projects (a team, a product suite, an organization's agent configs).
 | Color | Overall status (blue-white = healthy, yellow = warnings, red = critical) |
 | Pulse rate | Development activity / config change frequency |
 
-### Planet = Root Instruction File (CLAUDE.md / AGENTS.md)
+### Planet = Context Surface
 
-The planet **is** the root instruction file — the governing document that defines
-how the AI agent understands the project. This is the conceptual center of gravity.
-Everything else orbits it because everything else exists in relation to it.
+The planet represents the **context surface** — the totality of everything that is
+directly visible to an AI agent at the start of a session. This is not a single
+file but a composite of all auto-injected context that forms the agent's initial
+understanding of the project.
+
+The context surface includes:
+- **Root instruction files** — CLAUDE.md, AGENTS.md (auto-loaded)
+- **Parent directory instructions** — CLAUDE.md files up the tree to git root
+- **Rules files** — .mdc (glob-matched), .cursorrules, .windsurfrules
+- **MCP tool definitions** — tool schemas injected from configured servers
+- **Auto-loaded skills** — skills discovered in skill directories
+- **Custom instructions** — .claude/settings.json `customInstructions`
+- **Hook output** — SessionStart hooks, prompt-submit hooks
+- **IDE system prompts** — built-in system context from the IDE/tool
+- **Project config** — agentctl.yaml, .cursor/config, etc.
 
 | Planet Property | Maps To |
 |-----------------|---------|
-| Size | Token count of root instruction file + overall context footprint |
-| Surface richness | Reference density (well-connected root = detailed surface) |
+| Size | Total context surface token weight |
+| Surface richness / detail | Reference density + connectivity % |
 | Color / texture | Health status (green/blue = healthy, orange/red = warnings) |
 | Atmosphere thickness | Context pressure (thick haze = high pressure, clear = comfortable) |
+| Atmosphere layers | Conditionally-activated context (shimmers based on what's active) |
 | Rotation speed | Development velocity / config change frequency |
+| Terrain features | Platform-specific context layers (visible geological strata) |
 
-A project with **no root instruction file** is a barren, featureless rock — visually
+A project with **an empty context surface** is a barren, featureless rock — visually
 communicating that there's no agentic governance in place.
+
+**Platform awareness:** The same project may render differently depending on the
+agent platform being analyzed (Claude Code vs. Cursor vs. Windsurf), because the
+context surface differs per platform. The dashboard should support switching
+between platform views.
 
 ### Moons = .md Files (Instructions + Skills)
 
@@ -61,14 +84,15 @@ nature. Distinguished by color:
 |-----------|-------|---------|
 | Instruction files | Blue | Nested CLAUDE.md, instructions.md, system.md |
 | Skills | Gold | SKILL.md files from skill directories |
+| Rules files | Violet | .mdc files, .cursorrules, .windsurfrules |
 | Other agentic .md | Silver/White | Referenced docs, prompt templates |
 
 | Moon Property | Maps To |
 |---------------|---------|
 | Size | Token count |
-| Orbit distance | Degrees of separation from root (see Reference Graph) |
+| Orbit distance | Degrees of separation from context surface (see Reference Graph) |
 | Brightness | Connectivity — well-referenced moons glow brighter |
-| Count | Number of agentic document layers |
+| Stability | Linked = stable orbit; unlinked = drifting, wobbling |
 
 ### Satellites = MCP Servers
 
@@ -83,6 +107,7 @@ tools.
 | Size | Tool count |
 | Shape/model | Transport type (distinct silhouettes for stdio, http, sse) |
 | Antenna dish direction | Points "outward" toward the service it connects to |
+| Linked/unlinked | Referenced in any instruction = stable; unreferenced = drifting |
 
 ### Debris / Asteroids = Dead Capabilities
 
@@ -96,90 +121,53 @@ entered or left the gravitational field.
 
 ---
 
-## The Reference Graph — Connectivity as Core Signal
+## Connectivity & Reference Arcs
 
-The most important structural insight in the dashboard is **connectivity**. Every
-moon and satellite is either linked to the planet or it isn't.
+The reference graph is the structural backbone of the visualization. Every moon
+and satellite is either **linked** or **unlinked** to the context surface.
 
-### How Linking Works
+See [CONTEXT-SURFACE-AND-REFERENCES.md](./CONTEXT-SURFACE-AND-REFERENCES.md)
+for the full reference detection system, including:
+- Three-layer reference detection (lat annotations, wiki/structural links, semantic)
+- Confidence scoring per reference type
+- The `ReferenceGraph` and `ConnectivityStatus` type definitions
+- Lat annotation format specification
 
-**Linked** = the root instruction file references it directly, OR it is reachable
-through a chain of references (any degree of separation). These objects orbit
-normally, look healthy, feel integrated.
+### Visual Treatment
 
-**Unlinked** = nothing in the reference chain connects it back to the root. These
-are **drifting**:
+**Linked objects** (reachable from context surface through reference chain):
+- Bright, stable orbit
+- Solid reference arcs on click
 
+**Unlinked objects** (orphaned — no reference chain to context surface):
 - Dimmer / partially transparent
 - Unstable orbit (subtle wobble, slowly drifting outward)
-- Broken tether visual — a faded, dashed line where a connection should be
-- Small warning indicator
+- Broken tether visual
+- Warning indicator
 
-This immediately surfaces real problems:
-- Orphaned instruction files no agent will ever see
-- MCP servers configured but never mentioned in any prompt
-- Skills that exist but aren't referenced anywhere
+### Arc Interaction
 
-### Reference Detection (New CLI Module)
+Arcs appear **on interaction**, not all at once:
 
-The CLI core needs a new analysis module that builds a reference graph:
-
-```typescript
-interface AgenticReference {
-  source: string;              // file path of the referencing file
-  target: string;              // what it references
-  target_type: "instruction" | "skill" | "mcp" | "file";
-  match_type: "explicit_path"  // e.g., "see src/api/CLAUDE.md"
-            | "name_mention"   // e.g., "use the github MCP server"
-            | "skill_invoke"   // e.g., "run the deploy skill"
-            | "mcp_tool_ref";  // e.g., "use the create_issue tool"
-  context: string;             // the line containing the reference
-  line_number?: number;
-}
-
-interface ConnectivityStatus {
-  object_id: string;           // file path or MCP server name
-  object_type: "instruction" | "skill" | "mcp";
-  linked: boolean;
-  degrees_from_root: number | null;  // null if unlinked
-  reference_chain: string[];         // path from root to this object
-  referenced_by: string[];           // what points to this object
-  references: string[];              // what this object points to
-}
-
-interface ReferenceGraph {
-  root: string;                      // root instruction file path
-  nodes: ConnectivityStatus[];
-  edges: AgenticReference[];
-  summary: {
-    total_nodes: number;
-    linked_nodes: number;
-    unlinked_nodes: number;
-    connectivity_pct: number;        // linked / total
-    max_depth: number;               // longest reference chain
-  };
-}
-```
-
-### Reference Arcs (Visual)
-
-Arcs appear **on interaction**, not all at once (prevents visual overload):
-
-- **Click planet** → arcs fan out to all directly referenced moons and satellites
+- **Click planet** → arcs fan out to all directly referenced objects
 - **Click a moon** → bidirectional arcs: what it references AND what references it
-- **Click a satellite (MCP)** → arcs to moons/planet that mention this server
-- **"Show all connections" toggle** → full reference web visible at once
+- **Click a satellite** → arcs to instructions that mention this server
+- **"Show all connections" toggle** → full reference web
 
-**Arc styling:**
-- Solid bright line = direct reference (1 degree of separation)
-- Dashed/faded line = indirect reference (2+ degrees)
-- Arc color follows target type (blue = instruction, gold = skill, green = MCP)
-- Broken/red arc = reference to something that doesn't exist (dead reference)
+**Arc styling by reference type:**
 
-**Chain visualization:** Click an unlinked object → the system shows why it's
-unlinked (no arcs connect to it). Click a deeply-linked object → the full chain
-lights up: planet → moon A → moon B → this moon. The reference topology becomes
-visible without needing a separate graph view.
+| Reference Type | Arc Style |
+|----------------|-----------|
+| Lat annotation | Solid bright line, labeled |
+| Wiki link / explicit path | Solid line |
+| Glob pattern match | Solid line, dashed at edges (pattern-based) |
+| Semantic match (high confidence) | Dashed line, confidence % tooltip |
+| Semantic match (low confidence) | Faint dotted line, "show all" mode only |
+| Broken reference (target missing) | Red broken line with warning icon |
+
+**Chain visualization:** Click a deeply-linked object → the full chain lights up:
+planet surface → moon A → moon B → this moon. Click an unlinked object → the
+system shows why it's unlinked (no arcs connect to it).
 
 ---
 
@@ -197,8 +185,8 @@ Workspace (Solar System) — zoomed out
 │
 └── Planet Detail — zoomed in
     │
-    ├── Planet surface: root instruction file identity
-    ├── Moons orbiting: instruction files (blue) + skills (gold)
+    ├── Planet surface: context surface identity + composition breakdown
+    ├── Moons orbiting: instructions (blue), skills (gold), rules (violet)
     │   ├── Linked moons: bright, stable orbit
     │   ├── Unlinked moons: dim, drifting, broken tether
     │   └── Click moon: inspect panel
@@ -207,18 +195,20 @@ Workspace (Solar System) — zoomed out
     │   ├── Green blink: connected
     │   ├── Red blink: disconnected
     │   ├── Distance from planet: token cost
+    │   ├── Linked/unlinked visual treatment
     │   └── Click satellite: inspect panel
     │
     ├── Debris: dead capabilities (drifting)
     │   └── Click debris: details + "Clear" button
     │
-    ├── Reference arcs: appear on click/hover
+    ├── Reference arcs: appear on click/hover (styled by type)
     │
     └── Toolbar:
         ├── Run Scan (re-scan MCP servers)
         ├── Run Doctor (health check)
         ├── Optimize (clear debris field)
         ├── Show All Connections (toggle reference arcs)
+        ├── Platform Selector (Claude Code / Cursor / Windsurf)
         ├── Timeline (historical scrubber)
         └── Compare (side-by-side diff view)
 ```
@@ -227,19 +217,22 @@ Workspace (Solar System) — zoomed out
 
 When any object is clicked, a side panel slides in showing:
 
-**For planet (root instruction):**
-- File content (rendered markdown)
-- Token count
-- Outgoing references (what it mentions)
-- Health summary from plan report
-- Context pressure gauge
+**For planet (context surface):**
+- Composition breakdown: which files/configs contribute to the surface
+- Per-layer token counts (instructions, rules, MCP tools, skills, hooks)
+- Total context surface tokens vs. model context window (pressure gauge)
+- Outgoing references from surface files
+- Connectivity summary (X linked, Y unlinked, Z% connectivity)
+- Platform indicator
 
-**For moons (instructions / skills):**
+**For moons (instructions / skills / rules):**
 - File content (rendered markdown)
 - Token count, scope, depth
-- Connectivity: linked/unlinked, degrees from root, reference chain
+- Connectivity: linked/unlinked, degrees from surface, reference chain
+- Reference breakdown: structural refs, semantic refs (with confidence)
 - Outgoing references
 - Incoming references (what mentions this file)
+- For .mdc rules: glob pattern + which files it matches
 - "Open in editor" action
 
 **For satellites (MCP servers):**
@@ -247,7 +240,7 @@ When any object is clicked, a side panel slides in showing:
 - Transport type
 - Tools list (name, description, token cost per tool)
 - Total token cost
-- Which instruction files reference this server
+- Which instruction files reference this server (structural + semantic)
 - Dead capabilities within this server
 - "Run doctor check" action
 
@@ -281,15 +274,19 @@ When any object is clicked, a side panel slides in showing:
 │                    agentctl (OSS Core)                       │
 │                                                             │
 │  CLI: scan, plan, doctor, diff, optimize, workspace         │
-│  Analysis: redundancy, dead caps, pressure, REFERENCES (new)│
+│  Analysis: redundancy, dead caps, pressure                  │
+│  Analysis: reference graph (structural + semantic) [NEW]    │
+│  Analysis: context surface builder [NEW]                    │
 │  MCP Client: stdio, SSE, HTTP, OAuth                        │
 │  Token Budgeting: per-model context estimation              │
 │  Output: JSON artifacts (.agentctl/latest/)                 │
 │                                                             │
-│  NEW: reference graph builder (connectivity analysis)       │
+│  NEW: context surface model (platform-aware)                │
+│  NEW: reference graph builder (3-layer detection)           │
+│  NEW: lat annotation parser                                 │
 │  NEW: workspace.yaml — multi-project workspace definition   │
 │  NEW: agentctl serve — local API server for dashboard       │
-│  NEW: topology.json artifact                                │
+│  NEW: topology.json + surface.json artifacts                │
 └──────────────────────┬──────────────────────────────────────┘
                        │ JSON over HTTP / WebSocket
 ┌──────────────────────▼──────────────────────────────────────┐
@@ -300,20 +297,21 @@ When any object is clicked, a side panel slides in showing:
 │  │                                                      │   │
 │  │  Solar System Scene                                  │   │
 │  │  ├── Star (workspace)                                │   │
-│  │  ├── Planet (root instruction)                       │   │
-│  │  ├── Moons (instructions + skills, color-coded)      │   │
+│  │  ├── Planet (context surface — composite)            │   │
+│  │  ├── Moons (instructions, skills, rules — colored)   │   │
 │  │  ├── Satellites (MCP servers, status lights)         │   │
 │  │  ├── Debris (dead capabilities)                      │   │
-│  │  └── Reference Arcs (on interaction)                 │   │
+│  │  └── Reference Arcs (structural + semantic, styled)  │   │
 │  │                                                      │   │
 │  │  Panels: Inspect, Timeline, Compare, Optimize        │   │
+│  │  Platform Selector: Claude Code / Cursor / Windsurf  │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                             │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │  API Layer (tRPC / Express)                          │   │
 │  │  - Workspace CRUD                                    │   │
 │  │  - Project scanning (delegates to CLI)               │   │
-│  │  - Reference graph serving                           │   │
+│  │  - Reference graph + surface serving                 │   │
 │  │  - WebSocket for live updates                        │   │
 │  └──────────────────────────────────────────────────────┘   │
 │                                                             │
@@ -351,8 +349,8 @@ interface StarNode {
 interface PlanetNode {
   project: string;
   path: string;
-  root_instruction: InstructionFile | null;  // null = barren rock
-  size: number;
+  context_surface: ContextSurface;
+  size: number;                   // total surface token weight
   health: "healthy" | "warning" | "error";
   context_pressure: number;       // 0-1, atmosphere thickness
   waste_percentage: number;
@@ -364,22 +362,22 @@ interface PlanetNode {
 }
 
 interface MoonNode {
-  file: InstructionFile | SkillEntry;
-  moon_type: "instruction" | "skill";
-  orbit_radius: number;           // from degrees_of_separation or depth
+  file: InstructionFile | SkillEntry | RulesFile;
+  moon_type: "instruction" | "skill" | "rules";
+  orbit_radius: number;           // from degrees_of_separation
   size: number;                   // from token_count
-  linked: boolean;                // from reference graph
-  degrees_from_root: number | null;
-  brightness: number;             // from reference count (more refs = brighter)
+  linked: boolean;
+  degrees_from_surface: number | null;
+  brightness: number;             // from reference count
 }
 
 interface SatelliteNode {
   mcp_server: McpEntry;
   status: "connected" | "disconnected" | "error" | "unknown";
-  distance: number;               // from token_cost (higher = further)
+  distance: number;               // from token_cost
   size: number;                   // from tool_count
   transport_shape: "stdio" | "http" | "sse";
-  linked: boolean;                // is this server referenced in any instruction?
+  linked: boolean;
   blink_color: "green" | "red" | "yellow";
 }
 
@@ -392,7 +390,6 @@ interface DebrisNode {
 ### Workspace Config
 
 ```typescript
-// workspace.yaml
 interface WorkspaceConfig {
   version: 1;
   workspace: {
@@ -404,46 +401,14 @@ interface WorkspaceConfig {
 
 interface ProjectRef {
   name: string;
-  path: string;           // relative or absolute path to project root
-  tags?: string[];         // e.g. ["frontend", "api", "shared"]
+  path: string;
+  tags?: string[];
 }
 ```
 
-### Reference Graph (New Core Type)
-
-```typescript
-interface AgenticReference {
-  source: string;
-  target: string;
-  target_type: "instruction" | "skill" | "mcp" | "file";
-  match_type: "explicit_path" | "name_mention" | "skill_invoke" | "mcp_tool_ref";
-  context: string;
-  line_number?: number;
-}
-
-interface ConnectivityStatus {
-  object_id: string;
-  object_type: "instruction" | "skill" | "mcp";
-  linked: boolean;
-  degrees_from_root: number | null;
-  reference_chain: string[];
-  referenced_by: string[];
-  references: string[];
-}
-
-interface ReferenceGraph {
-  root: string;
-  nodes: ConnectivityStatus[];
-  edges: AgenticReference[];
-  summary: {
-    total_nodes: number;
-    linked_nodes: number;
-    unlinked_nodes: number;
-    connectivity_pct: number;
-    max_depth: number;
-  };
-}
-```
+See [CONTEXT-SURFACE-AND-REFERENCES.md](./CONTEXT-SURFACE-AND-REFERENCES.md)
+for the full `ContextSurface`, `ReferenceGraph`, and `AgenticReference` type
+definitions.
 
 ---
 
@@ -452,10 +417,12 @@ interface ReferenceGraph {
 ### Free (OSS CLI)
 
 - Full CLI: scan, plan, doctor, diff, optimize, workspace
-- Reference graph analysis (new — valuable even in CLI)
+- Context surface analysis (new)
+- Reference graph with structural detection (new)
+- Connectivity % reporting (new)
 - Single-project analysis
 - JSON artifact output
-- CI/CD integration (diff gates, fail-on flags)
+- CI/CD integration (diff gates, fail-on flags, fail-on-unlinked)
 - Community support
 
 ### Pro ($X/month per user)
@@ -463,7 +430,9 @@ interface ReferenceGraph {
 - Everything in Free
 - Solar system dashboard (local)
 - Multi-project workspaces
-- Reference arc visualization
+- Reference arc visualization (structural + semantic)
+- Semantic reference detection
+- Platform switching (Claude Code / Cursor / Windsurf views)
 - Historical trend tracking (local SQLite)
 - One-click optimization
 - Priority support
@@ -484,12 +453,6 @@ interface ReferenceGraph {
 
 ### Rendering: React Three Fiber (R3F)
 
-**Why R3F:**
-- Component model matches React (each celestial body = component)
-- `@react-three/drei` — orbit controls, text, effects
-- `@react-three/postprocessing` — bloom (star glow), depth of field
-- Large ecosystem, active community
-
 **Key packages:**
 - `three` + `@react-three/fiber` — core 3D
 - `@react-three/drei` — OrbitControls, Text, Stars background, Line (for arcs)
@@ -507,7 +470,6 @@ interface ReferenceGraph {
 
 - Zero setup for local dashboard
 - Upgrades to Turso for SaaS tier
-- Stores: workspace configs, historical snapshots, preferences
 
 ### Monorepo Structure
 
@@ -520,7 +482,8 @@ agentctl/
 │   │   │   │   ├── redundancy.ts
 │   │   │   │   ├── dead-caps.ts
 │   │   │   │   ├── pressure.ts
-│   │   │   │   └── references.ts    ← NEW: reference graph builder
+│   │   │   │   ├── references.ts    ← structural + semantic detection
+│   │   │   │   └── surface.ts       ← context surface builder
 │   │   │   ├── config/
 │   │   │   ├── mcp/
 │   │   │   ├── tokens/
@@ -529,39 +492,9 @@ agentctl/
 │   │   └── package.json
 │   │
 │   ├── cli/               # CLI commands (thin shell over core)
-│   │   ├── src/commands/
-│   │   └── package.json
-│   │
 │   ├── api/               # Local API server for dashboard
-│   │   ├── src/
-│   │   │   ├── routers/
-│   │   │   ├── ws/
-│   │   │   └── index.ts
-│   │   └── package.json
-│   │
 │   ├── dashboard/         # React + R3F frontend
-│   │   ├── src/
-│   │   │   ├── components/
-│   │   │   │   ├── scene/
-│   │   │   │   │   ├── Star.tsx
-│   │   │   │   │   ├── Planet.tsx
-│   │   │   │   │   ├── Moon.tsx
-│   │   │   │   │   ├── Satellite.tsx
-│   │   │   │   │   ├── Debris.tsx
-│   │   │   │   │   ├── ReferenceArc.tsx
-│   │   │   │   │   └── SolarSystem.tsx
-│   │   │   │   ├── panels/
-│   │   │   │   │   ├── InspectPanel.tsx
-│   │   │   │   │   ├── TimelineBar.tsx
-│   │   │   │   │   └── CompareView.tsx
-│   │   │   │   └── layout/
-│   │   │   ├── hooks/
-│   │   │   ├── stores/
-│   │   │   └── App.tsx
-│   │   └── package.json
-│   │
 │   └── shared/            # Shared types
-│       └── src/types.ts
 │
 ├── pnpm-workspace.yaml
 └── package.json
@@ -571,82 +504,71 @@ agentctl/
 
 ## Phase Roadmap
 
-### Phase 1 — Reference Graph + Local Dashboard MVP
+### Phase 1 — Context Surface + Reference Graph + Local Dashboard MVP
 
 **Goal:** `agentctl dashboard` opens browser with 3D planet view of current project.
 
-- [ ] Build reference graph analysis module in core
-- [ ] Add `topology.json` artifact output to plan pipeline
+- [ ] Define and build context surface model (platform-aware)
+- [ ] Build 3-layer reference graph (lat, structural, semantic)
+- [ ] Add `topology.json` + `surface.json` artifact output
 - [ ] Add connectivity data to workspace command
 - [ ] Extract core library from CLI (`packages/core`)
-- [ ] `agentctl serve` command — local tRPC server
+- [ ] `agentctl serve` — local tRPC server
 - [ ] React + Vite + R3F frontend scaffolding
-- [ ] Single planet view: moons (blue/gold), satellites (blinking), debris
-- [ ] Reference arcs on click
+- [ ] Planet as context surface (composite visualization)
+- [ ] Moons: instructions (blue), skills (gold), rules (violet)
+- [ ] Satellites: MCP servers (blinking status, distance = cost)
+- [ ] Reference arcs on click (styled by type + confidence)
 - [ ] Unlinked objects visual treatment (dim, drifting)
-- [ ] Inspect panel (click any object → see data)
-- [ ] Run CLI commands from UI (scan, doctor, optimize)
+- [ ] Inspect panel with reference breakdown
+- [ ] Run CLI commands from UI
 
 ### Phase 2 — Multi-Project Workspace
-
-**Goal:** Full solar system with multiple planets.
 
 - [ ] `workspace.yaml` config format
 - [ ] Batch scanning across projects
 - [ ] Star node with aggregate metrics
 - [ ] Solar system view with orbit animations
-- [ ] Fly-in/fly-out camera transitions between workspace and planet views
+- [ ] Fly-in/fly-out camera transitions
 - [ ] Cross-project redundancy detection
+- [ ] Platform selector (Claude Code / Cursor / Windsurf)
 
 ### Phase 3 — Live Monitoring + History
 
-**Goal:** Dashboard stays alive, reacts to changes, shows evolution.
-
-- [ ] File watchers on MCP configs + instruction files
+- [ ] File watchers on agentic files
 - [ ] Auto re-scan on change → WebSocket push
-- [ ] MCP server health polling (satellite status lights update live)
+- [ ] MCP server health polling (live satellite status)
 - [ ] SQLite for historical snapshots
-- [ ] Timeline scrubber (git history integration)
+- [ ] Timeline scrubber (git history)
 - [ ] Comet animations for detected changes
-- [ ] Trend charts (token budget, connectivity % over time)
+- [ ] Trend charts (tokens, connectivity %, waste % over time)
 
 ### Phase 4 — SaaS + Teams
 
-**Goal:** Cloud-hosted multi-user workspaces.
-
-- [ ] Auth (clerk / auth.js)
-- [ ] Cloud persistence (Turso)
-- [ ] Team workspaces with role-based access
-- [ ] Webhook integrations (Slack, Discord)
-- [ ] Shared workspace URLs
-- [ ] Billing integration (Stripe)
+- [ ] Auth, cloud persistence, RBAC
+- [ ] Team workspaces, shared URLs
+- [ ] Webhook integrations
+- [ ] Billing (Stripe)
 
 ---
 
 ## Open Questions
 
-1. **2D fallback?** A flat graph view for accessibility and low-power devices.
-   The reference graph data lends itself naturally to a force-directed 2D layout.
+1. **2D fallback?** Force-directed graph layout as accessible alternative.
 
-2. **Large workspaces?** 50+ projects. LOD system, tag-based filtering, or
-   clustering distant planets into "constellation" groups.
+2. **Large workspaces?** LOD system, tag-based filtering, constellation clusters.
 
-3. **Electron vs. browser?** Browser-first (`agentctl dashboard` starts local
-   server + opens browser) is lower friction. Electron later for power users
-   who want system tray, auto-updates, native file watching.
+3. **Electron vs. browser?** Browser-first, Electron later for power users.
 
-4. **Procedural planet textures?** Hash project config into a seed for
-   deterministic but unique planet appearances. Each project is visually distinct.
+4. **Procedural planet textures?** Hash context surface composition into a seed
+   for deterministic but unique planet appearances per project.
 
-5. **Background aesthetics?** Star field, nebulae, constellations. Could map
-   constellations to project tag groupings.
+5. **Sound design?** Ambient audio, warning tones. Low priority, high delight.
 
-6. **Sound design?** Ambient space audio, click feedback, warning tones for
-   red-blinking satellites. Optional but high delight. Low priority.
+6. **Platform-specific views?** Same project, different planets depending on
+   agent platform. Or one planet with toggleable layers?
 
-7. **How aggressive should reference detection be?** Fuzzy matching (e.g., "use
-   the github server" → matches MCP server named "github") vs. strict matching
-   (explicit paths only). Probably: strict first, fuzzy as opt-in.
+7. **Connectivity % as CI gate?** `agentctl plan --fail-on-unlinked` for teams.
 
-8. **Should connectivity % be a CI gate?** `agentctl plan --fail-on-unlinked`
-   fails if any agentic files are orphaned. Powerful for teams.
+8. **Lat annotation adoption?** Should agentctl generate a starter lattice from
+   discovered references? User validates → becomes source of truth.
