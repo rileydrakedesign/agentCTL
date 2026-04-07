@@ -123,6 +123,167 @@ export interface Analysis {
   warnings: ContextWarning[];
 }
 
+// ── Context Surface ─────────────────────────────────────────
+
+export type PlatformName = "claude-code" | "cursor" | "windsurf" | "generic";
+
+export interface PlatformProfile {
+  name: PlatformName;
+  root_instruction_files: string[];
+  rules_patterns: string[];
+  skill_directories: string[];
+  config_files: string[];
+  supports_hooks: boolean;
+  supports_mdc: boolean;
+  supports_custom_instructions: boolean;
+}
+
+export type SurfaceLayerType =
+  | "root_instruction"
+  | "parent_instruction"
+  | "rules_file"
+  | "mcp_tool_definitions"
+  | "skill"
+  | "custom_instructions"
+  | "hook_output"
+  | "ide_config"
+  | "project_config";
+
+export interface SurfaceLayer {
+  layer_type: SurfaceLayerType;
+  source_path: string;
+  token_count: number;
+  platform: string;
+  always_present: boolean;
+  activation_condition?: string;
+}
+
+export interface SurfaceCompositionEntry {
+  count: number;
+  tokens: number;
+  percentage: number;
+}
+
+export interface ContextSurface {
+  platform: PlatformName;
+  layers: SurfaceLayer[];
+  total_tokens: number;
+  core_tokens: number;
+  conditional_tokens: number;
+  composition: Partial<Record<SurfaceLayerType, SurfaceCompositionEntry>>;
+  pressure: {
+    model: string;
+    context_window: number;
+    surface_pct: number;
+    remaining_tokens: number;
+  };
+}
+
+// ── References ──────────────────────────────────────────────
+
+export type ReferenceType =
+  | "lat_annotation"
+  | "lat_file"
+  | "wiki_link"
+  | "explicit_path"
+  | "glob_match"
+  | "mcp_name_mention"
+  | "skill_name_mention"
+  | "semantic_mention";
+
+export interface AgenticReference {
+  source: string;
+  target: string;
+  target_type: "instruction" | "skill" | "mcp" | "rules" | "file" | "unknown";
+  reference_type: ReferenceType;
+  confidence: number;
+  context: string;
+  line_number?: number;
+  verified: boolean;
+  category: "structural" | "semantic";
+}
+
+// ── Reference Graph ─────────────────────────────────────────
+
+export interface ConnectivityStatus {
+  object_id: string;
+  object_type: "instruction" | "skill" | "mcp" | "rules";
+  linked: boolean;
+  degrees_from_surface: number | null;
+  reference_chain: string[];
+  referenced_by: AgenticReference[];
+  references: AgenticReference[];
+  structural_ref_count: number;
+  semantic_ref_count: number;
+}
+
+export interface ReferenceGraphSummary {
+  total_nodes: number;
+  linked_nodes: number;
+  unlinked_nodes: number;
+  connectivity_pct: number;
+  max_depth: number;
+  structural_edges: number;
+  semantic_edges: number;
+  lat_edges: number;
+  broken_edges: number;
+}
+
+export interface ReferenceGraph {
+  context_surface_nodes: string[];
+  nodes: ConnectivityStatus[];
+  edges: AgenticReference[];
+  broken_references: AgenticReference[];
+  summary: ReferenceGraphSummary;
+}
+
+// ── Staleness ───────────────────────────────────────────────
+
+export type StalenessType =
+  | "broken_reference"
+  | "dead_glob"
+  | "missing_skill_dir"
+  | "missing_dependency"
+  | "missing_env_var"
+  | "dead_path_reference";
+
+export interface StaleEntity {
+  source: string;
+  line_number?: number;
+  staleness_type: StalenessType;
+  stale_target: string;
+  confidence: number;
+  detail: string;
+  tier: 1 | 2 | 3;
+}
+
+export interface RulesFile {
+  path: string;
+  platform: "cursor" | "windsurf" | "generic";
+  token_count: number;
+  glob_patterns?: string[];
+  description?: string;
+  always_active: boolean;
+}
+
+// ── Contradictions ──────────────────────────────────────────
+
+export type ConflictSeverity = "error" | "warning" | "info";
+export type ConflictClass = "hard_conflict" | "scope_override" | "tool_overlap";
+
+export interface Contradiction {
+  file_a: string;
+  file_b: string;
+  directive_a: string;
+  directive_b: string;
+  line_a?: number;
+  line_b?: number;
+  topic: string;
+  classification: ConflictClass;
+  severity: ConflictSeverity;
+  explanation: string;
+}
+
 // ── Workspace ───────────────────────────────────────────────
 
 export interface McpCost {
@@ -218,6 +379,16 @@ export interface PlanReport {
   analysis: Analysis;
   recommendations: string[];
   diagnostics: Diagnostic[];
+  context_surface?: ContextSurface;
+  reference_graph?: {
+    connectivity_pct: number;
+    linked: number;
+    unlinked: number;
+    broken_references: number;
+    unlinked_entities: string[];
+  };
+  staleness?: StaleEntity[];
+  contradictions?: Contradiction[];
 }
 
 // ── Agentic Workspace ──────────────────────────────────

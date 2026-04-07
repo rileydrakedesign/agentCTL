@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { renderPlanReport } from "./terminal.js";
 import { renderDiffReport } from "./diff-terminal.js";
 import { renderOptimizeResult } from "./optimize-terminal.js";
-import type { ScanResult, PlanReport, DiffReport, OptimizeResult } from "../types.js";
+import type { ScanResult, PlanReport, DiffReport, OptimizeResult, ReferenceGraph } from "../types.js";
 
 const DEFAULT_DIR = ".agentctl/latest";
 
@@ -27,6 +27,7 @@ export async function writeScanArtifact(
 export async function writeArtifacts(
   plan: PlanReport,
   scan: ScanResult,
+  topology?: ReferenceGraph,
   outDir?: string,
 ): Promise<string> {
   const dir = resolve(outDir ?? DEFAULT_DIR);
@@ -34,7 +35,7 @@ export async function writeArtifacts(
 
   const summaryText = stripAnsi(renderPlanReport(plan));
 
-  await Promise.all([
+  const writes = [
     writeFile(join(dir, "scan.json"), JSON.stringify(scan, null, 2)),
     writeFile(join(dir, "plan.json"), JSON.stringify(plan, null, 2)),
     writeFile(
@@ -46,7 +47,27 @@ export async function writeArtifacts(
       JSON.stringify(plan.recommendations, null, 2),
     ),
     writeFile(join(dir, "summary.txt"), summaryText),
-  ]);
+  ];
+
+  if (plan.context_surface) {
+    writes.push(
+      writeFile(
+        join(dir, "surface.json"),
+        JSON.stringify(plan.context_surface, null, 2),
+      ),
+    );
+  }
+
+  if (topology) {
+    writes.push(
+      writeFile(
+        join(dir, "topology.json"),
+        JSON.stringify(topology, null, 2),
+      ),
+    );
+  }
+
+  await Promise.all(writes);
 
   return dir;
 }

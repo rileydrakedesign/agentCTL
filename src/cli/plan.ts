@@ -5,8 +5,14 @@ import chalk from "chalk";
 import ora from "ora";
 import type { Ora } from "ora";
 import type { Command } from "commander";
-import { discoverInputs } from "../config/discover.js";
+import { discoverInputs, discoverInstructionFiles } from "../config/discover.js";
 import { loadProjectConfig } from "../config/parse.js";
+import { buildContextSurface } from "../analysis/surface.js";
+import { detectStructuralReferences } from "../analysis/references.js";
+import { buildReferenceGraph } from "../analysis/graph.js";
+import { detectStaleness } from "../analysis/staleness.js";
+import { detectContradictions } from "../analysis/contradictions.js";
+import { parseLatAnnotations } from "../analysis/lat.js";
 import { scanServer } from "../mcp/client.js";
 import { computeBudgets } from "../tokens/budget.js";
 import { detectRedundancy } from "../analysis/redundancy.js";
@@ -17,7 +23,7 @@ import { writeArtifacts } from "../output/artifacts.js";
 import { renderPlanReport } from "../output/terminal.js";
 import { formatPlanJson } from "../output/json.js";
 import { parseSkillDirs } from "../skills/parse.js";
-import type { ScanResult, PlanReport, PlanStatus } from "../types.js";
+import type { ScanResult, PlanReport, PlanStatus, PlatformName, ReferenceGraph } from "../types.js";
 
 export interface PipelineOptions {
   config?: string;
@@ -25,6 +31,7 @@ export interface PipelineOptions {
   cached?: boolean;
   out?: string;
   spinner?: Ora;
+  platform?: PlatformName;
 }
 
 /**
@@ -33,7 +40,7 @@ export interface PipelineOptions {
  */
 export async function runPlanPipeline(
   opts: PipelineOptions = {},
-): Promise<{ plan: PlanReport; scan: ScanResult }> {
+): Promise<{ plan: PlanReport; scan: ScanResult; topology: ReferenceGraph }> {
   const spinner = opts.spinner;
 
   // Load project config
@@ -106,6 +113,10 @@ export async function runPlanPipeline(
   const parsedSkills = await parseSkillDirs(inputs.skill_dirs);
   const skillTokens = parsedSkills.reduce((sum, s) => sum + s.token_count, 0);
 
+  // Discover instruction files
+  if (spinner) spinner.text = "Scanning for instruction files...";
+  const instructionFiles = await discoverInstructionFiles();
+
   // Compute budgets
   if (spinner) spinner.text = "Computing token budgets...";
   const { budgets, target_reports } = await computeBudgets(
@@ -124,6 +135,83 @@ export async function runPlanPipeline(
     budgets,
     projectConfig.runtime_targets,
   );
+
+  // Context surface
+  if (spinner) spinner.text = "Building context surface...";
+  const context_surface = buildContextSurface(
+    opts.platform ?? "claude-code",
+    process.cwd(),
+    instructionFiles,
+    parsedSkills,
+    scan,
+    inputs,
+    projectConfig.runtime_targets[0],
+  );
+
+  // Reference detection + graph
+  if (spinner) spinner.text = "Detecting references...";
+  const fileContents = new Map<string, string>();
+  for (const file of instructionFiles) {
+    try {
+      const content = await readFile(resolve(file.path), "utf-8");
+      fileContents.set(file.path, content);
+    } catch {
+      // File unreadable — skip
+    }
+  }
+
+  const mcpServerNames = scan.servers
+    .filter((s) => s.status === "ok")
+    .map((s) => s.server);
+
+  // Parse lat annotations (highest precedence)
+  const latRefs = [];
+  for (const [filePath, content] of fileContents) {
+    latRefs.push(...parseLatAnnotations(filePath, content));
+  }
+
+  // Detect structural references
+  const structuralRefs = detectStructuralReferences(
+    instructionFiles,
+    fileContents,
+    parsedSkills,
+    mcpServerNames,
+    process.cwd(),
+  );
+
+  // Merge: lat annotations take precedence over structural
+  const latTargets = new Set(latRefs.map((r) => `${r.source}::${r.target}`));
+  const filteredStructural = structuralRefs.filter(
+    (r) => !latTargets.has(`${r.source}::${r.target}`),
+  );
+  const references = [...latRefs, ...filteredStructural];
+
+  const surfaceNodeIds = context_surface.layers
+    .filter((l) => l.layer_type === "root_instruction")
+    .map((l) => l.source_path);
+
+  const allGraphNodes = [
+    ...instructionFiles.map((f) => ({ id: f.path, type: "instruction" as const })),
+    ...parsedSkills.map((s) => ({ id: s.name, type: "skill" as const })),
+    ...mcpServerNames.map((name) => ({ id: `mcp:${name}`, type: "mcp" as const })),
+  ];
+
+  const refGraph: ReferenceGraph = buildReferenceGraph(references, surfaceNodeIds, allGraphNodes);
+
+  // Staleness detection
+  if (spinner) spinner.text = "Checking for staleness...";
+  const staleness = detectStaleness(refGraph, undefined, inputs.skill_dirs, process.cwd());
+
+  // Contradiction detection
+  if (spinner) spinner.text = "Checking for contradictions...";
+  const fileInputs = instructionFiles
+    .filter((f) => fileContents.has(f.path))
+    .map((f) => ({
+      path: f.path,
+      content: fileContents.get(f.path)!,
+      depth: f.depth,
+    }));
+  const contradictions = detectContradictions(fileInputs);
 
   // Workspace metrics
   const workspace = computeWorkspaceMetrics(
@@ -175,9 +263,21 @@ export async function runPlanPipeline(
     },
     recommendations,
     diagnostics: allDiagnostics,
+    context_surface,
+    reference_graph: {
+      connectivity_pct: refGraph.summary.connectivity_pct,
+      linked: refGraph.summary.linked_nodes,
+      unlinked: refGraph.summary.unlinked_nodes,
+      broken_references: refGraph.summary.broken_edges,
+      unlinked_entities: refGraph.nodes
+        .filter((n) => !n.linked)
+        .map((n) => n.object_id),
+    },
+    staleness: staleness.length > 0 ? staleness : undefined,
+    contradictions: contradictions.length > 0 ? contradictions : undefined,
   };
 
-  return { plan, scan };
+  return { plan, scan, topology: refGraph };
 }
 
 export function registerPlanCommand(program: Command): void {
@@ -191,11 +291,13 @@ export function registerPlanCommand(program: Command): void {
     .option("--models <list>", "Comma-separated model list override")
     .option("--fail-on <level>", "Exit non-zero on warnings or errors", "off")
     .option("--max-discovery-tokens <n>", "Fail if discovery exceeds budget", parseInt)
+    .option("--platform <name>", "Agent platform for context surface analysis", "claude-code")
     .action(async (opts) => {
       const spinner = ora("Loading configuration...").start();
 
       let plan: PlanReport;
       let scan: ScanResult;
+      let topology: ReferenceGraph;
       try {
         const result = await runPlanPipeline({
           config: opts.config,
@@ -203,9 +305,11 @@ export function registerPlanCommand(program: Command): void {
           cached: opts.cached,
           out: opts.out,
           spinner,
+          platform: opts.platform,
         });
         plan = result.plan;
         scan = result.scan;
+        topology = result.topology;
       } catch (err) {
         spinner.fail((err as Error).message);
         process.exit(1);
@@ -218,7 +322,7 @@ export function registerPlanCommand(program: Command): void {
         console.log(formatPlanJson(plan));
       } else {
         console.log(renderPlanReport(plan));
-        const dir = await writeArtifacts(plan, scan, opts.out);
+        const dir = await writeArtifacts(plan, scan, topology, opts.out);
         console.log(`  Artifacts written to ${chalk.dim(dir)}`);
         console.log("");
       }

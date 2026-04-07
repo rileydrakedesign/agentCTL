@@ -67,6 +67,49 @@ export function renderPlanReport(plan: PlanReport): string {
 
   lines.push(table.toString());
 
+  // Context Surface
+  if (plan.context_surface) {
+    const cs = plan.context_surface;
+    lines.push("");
+    lines.push(`  ${dim("── Context Surface ────────────────────────────────")}`);
+    lines.push(`  Platform:       ${cs.platform}`);
+    lines.push(`  Surface layers: ${cs.layers.length}`);
+    lines.push(`  Total tokens:   ${fmt(cs.total_tokens)} (${cs.pressure.surface_pct}% of ${fmt(cs.pressure.context_window)})`);
+    lines.push(`  Core:           ${fmt(cs.core_tokens)} tokens (always present)`);
+    if (cs.conditional_tokens > 0) {
+      lines.push(`  Conditional:    ${fmt(cs.conditional_tokens)} tokens (activation-dependent)`);
+    }
+
+    // Composition breakdown
+    const compositionEntries = Object.entries(cs.composition)
+      .sort(([, a], [, b]) => b.tokens - a.tokens);
+    if (compositionEntries.length > 0) {
+      for (const [type, entry] of compositionEntries) {
+        const label = type.replace(/_/g, " ");
+        lines.push(`    ${dim("•")} ${label}: ${fmt(entry.tokens)} tokens (${entry.percentage}%, ${entry.count} source${entry.count > 1 ? "s" : ""})`);
+      }
+    }
+  }
+
+  // Reference Graph
+  if (plan.reference_graph) {
+    const rg = plan.reference_graph;
+    lines.push("");
+    lines.push(`  ${dim("── Reference Graph ────────────────────────────────")}`);
+    lines.push(`  Connectivity:   ${rg.connectivity_pct}% (${rg.linked} linked, ${rg.unlinked} unlinked)`);
+    if (rg.broken_references > 0) {
+      lines.push(`  Broken refs:    ${red(String(rg.broken_references))}`);
+    }
+    if (rg.unlinked_entities.length > 0) {
+      for (const entity of rg.unlinked_entities.slice(0, 5)) {
+        lines.push(`    ${yellow("!")} ${entity} (unlinked)`);
+      }
+      if (rg.unlinked_entities.length > 5) {
+        lines.push(`    ${dim(`... and ${rg.unlinked_entities.length - 5} more`)}`);
+      }
+    }
+  }
+
   // Workspace
   lines.push("");
   lines.push(`  ${dim("── Workspace ──────────────────────────────────────")}`);
@@ -83,6 +126,29 @@ export function renderPlanReport(plan: PlanReport): string {
     `  Redundancy:     ${plan.analysis.redundancy_clusters.length} clusters`,
   );
   lines.push(`  Est. waste:     ${plan.workspace.waste_percentage}%`);
+
+  // Contradictions
+  if (plan.contradictions && plan.contradictions.length > 0) {
+    lines.push("");
+    lines.push(`  ${dim("── Contradictions ─────────────────────────────────")}`);
+    for (const c of plan.contradictions) {
+      const icon = c.severity === "error" ? red("X") : c.severity === "warning" ? yellow("!") : dim("i");
+      const label = c.classification.replace(/_/g, " ").toUpperCase();
+      lines.push(`  ${icon} ${label}: ${c.topic}`);
+      lines.push(`    ${dim(c.file_a)}${c.line_a ? `:${c.line_a}` : ""}  ${dim('"')}${c.directive_a.slice(0, 60)}${c.directive_a.length > 60 ? "..." : ""}${dim('"')}`);
+      lines.push(`    ${dim(c.file_b)}${c.line_b ? `:${c.line_b}` : ""}  ${dim('"')}${c.directive_b.slice(0, 60)}${c.directive_b.length > 60 ? "..." : ""}${dim('"')}`);
+    }
+  }
+
+  // Staleness
+  if (plan.staleness && plan.staleness.length > 0) {
+    lines.push("");
+    lines.push(`  ${dim("── Stale References ───────────────────────────────")}`);
+    for (const s of plan.staleness) {
+      const icon = s.tier === 1 ? red("!") : yellow("!");
+      lines.push(`  ${icon} ${s.source}: ${s.detail}`);
+    }
+  }
 
   // Warnings
   if (plan.workspace.warnings.length > 0 || plan.analysis.warnings.length > 0) {
