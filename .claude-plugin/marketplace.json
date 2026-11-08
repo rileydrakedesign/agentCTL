@@ -1,0 +1,14 @@
+{
+  "name": "agentctl",
+  "owner": {
+    "name": "Riley Drake"
+  },
+  "description": "Plugins by Riley Drake for auditing AI agent configuration.",
+  "plugins": [
+    {
+      "name": "agentctl",
+      "source": "./",
+      "description": "Audit an AI agent project's MCP servers, instruction files and skills for token cost, redundancy and config health."
+    }
+  ]
+}
