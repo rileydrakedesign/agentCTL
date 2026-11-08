@@ -15,10 +15,10 @@ Node 20 or newer. Run every command from the project root (the directory that ho
 Use the CLI without installing it:
 
 ```
-npx -y -p @rileydrakedesign/agentctl agentctl --version
+npx -y -p github:rileydrakedesign/agentCTL agentctl --version
 ```
 
-If the package is installed globally, drop the `npx -y -p @rileydrakedesign/agentctl` prefix
+If the package is installed globally, drop the `npx -y -p github:rileydrakedesign/agentCTL` prefix
 and call `agentctl` directly. The rest of this skill writes the short form.
 
 ## Steps
@@ -96,6 +96,6 @@ Both exit non-zero on a violation, so they work as a gate in any pipeline.
   `npx -y <server-package>`). Re-run `agentctl plan` afterwards; do not pass `--cached`
   until the scan succeeds.
 - `agentctl plan --cached` complains there is no previous scan: run `agentctl scan` first.
-- `npx` cannot find the package: the user is offline or behind a registry proxy. Clone
+- `npx` cannot fetch from GitHub: the user is offline or behind a proxy. Clone
   `https://github.com/rileydrakedesign/agentCTL`, run `pnpm install && pnpm build`, and call
   `node dist/index.js <command>` from that checkout instead.

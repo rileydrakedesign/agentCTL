@@ -9,10 +9,11 @@ Claude Code:   claude plugin install agentctl --marketplace rileydrakedesign/age
 Codex:         codex plugin marketplace add rileydrakedesign/agentCTL   then install agentctl from /plugins
 Cursor:        /add-plugin agentctl   (once listed)   or add this repo under Customize > Plugins
 Any agent:     npx skills add rileydrakedesign/agentCTL
-CLI only:      npm install -g @rileydrakedesign/agentctl
+CLI only:      npm install -g github:rileydrakedesign/agentCTL
 ```
 
-The plugin ships one skill, `audit-agent-context`, which drives the CLI below.
+The plugin ships one skill, `audit-agent-context`, which drives the CLI below. The CLI installs
+from GitHub until the npm release of `@rileydrakedesign/agentctl` lands.
 
 ## The Problem
 
@@ -29,7 +30,7 @@ When you wire up multiple MCP servers to an AI agent, you have no visibility int
 
 ```bash
 # Install (see Install section below)
-npm install -g @rileydrakedesign/agentctl
+npm install -g github:rileydrakedesign/agentCTL
 
 # Initialize project config
 agentctl init --name my-agent
