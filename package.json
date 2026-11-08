@@ -1,5 +1,5 @@
 {
-  "name": "agentctl",
+  "name": "@rileydrakedesign/agentctl",
   "version": "0.1.0",
   "description": "CLI-first configuration intelligence for AI agent toolchains",
   "type": "module",
@@ -29,6 +29,15 @@
     "cli",
     "context-window"
   ],
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rileydrakedesign/agentCTL.git"
+  },
+  "homepage": "https://github.com/rileydrakedesign/agentCTL#readme",
+  "bugs": "https://github.com/rileydrakedesign/agentCTL/issues",
   "license": "MIT",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.28.0",

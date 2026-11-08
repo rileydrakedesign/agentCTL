@@ -1,0 +1,8 @@
+{
+  "name": "agentctl",
+  "version": "0.1.0",
+  "description": "Audit an AI agent project's MCP servers, instruction files and skills for token cost, redundancy and config health.",
+  "author": { "name": "Riley Drake" },
+  "repository": "https://github.com/rileydrakedesign/agentCTL",
+  "license": "MIT"
+}

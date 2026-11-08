@@ -2,6 +2,18 @@
 
 CLI-first configuration intelligence for AI agent toolchains. Analyze your MCP server setup before your agent runs — catch context bloat, capability overlap, and dead tools early.
 
+## Install
+
+```
+Claude Code:   claude plugin install agentctl --marketplace rileydrakedesign/agentCTL
+Codex:         codex plugin marketplace add rileydrakedesign/agentCTL   then install agentctl from /plugins
+Cursor:        /add-plugin agentctl   (once listed)   or add this repo under Customize > Plugins
+Any agent:     npx skills add rileydrakedesign/agentCTL
+CLI only:      npm install -g @rileydrakedesign/agentctl
+```
+
+The plugin ships one skill, `audit-agent-context`, which drives the CLI below.
+
 ## The Problem
 
 When you wire up multiple MCP servers to an AI agent, you have no visibility into:
@@ -16,8 +28,8 @@ When you wire up multiple MCP servers to an AI agent, you have no visibility int
 ## Quick Start
 
 ```bash
-# Install
-pnpm install -g agentctl
+# Install (see Install section below)
+npm install -g @rileydrakedesign/agentctl
 
 # Initialize project config
 agentctl init --name my-agent
