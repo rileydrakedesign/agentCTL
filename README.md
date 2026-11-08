@@ -6,7 +6,6 @@ CLI-first configuration intelligence for AI agent toolchains. Analyze your MCP s
 
 ```
 Claude Code:   claude plugin install agentctl --marketplace rileydrakedesign/agentCTL
-Codex:         codex plugin marketplace add rileydrakedesign/agentCTL   then install agentctl from /plugins
 Cursor:        /add-plugin agentctl   (once listed)   or add this repo under Customize > Plugins
 Any agent:     npx skills add rileydrakedesign/agentCTL
 CLI only:      npm install -g github:rileydrakedesign/agentCTL
