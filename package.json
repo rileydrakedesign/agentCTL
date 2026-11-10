@@ -1,5 +1,5 @@
 {
-  "name": "@rileydrakedesign/agentctl",
+  "name": "@rileydrake/agentctl",
   "version": "0.1.0",
   "description": "CLI-first configuration intelligence for AI agent toolchains",
   "type": "module",

@@ -12,7 +12,7 @@ CLI only:      npm install -g github:rileydrakedesign/agentCTL
 ```
 
 The plugin ships one skill, `audit-agent-context`, which drives the CLI below. The CLI installs
-from GitHub until the npm release of `@rileydrakedesign/agentctl` lands.
+from GitHub until the npm release of `@rileydrake/agentctl` lands.
 
 ## The Problem
 

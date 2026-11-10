@@ -40,5 +40,5 @@ pnpm lint         # eslint
 
 - `skills/<name>/SKILL.md` is the user-facing unit (Agent Skills format; `name` equals the folder)
 - `.claude-plugin/plugin.json`, `.claude-plugin/marketplace.json` and root `plugin.json` must share one `version` with `package.json`
-- npm package is `@rileydrakedesign/agentctl`; the bin stays `agentctl`
+- npm package is `@rileydrake/agentctl`; the bin stays `agentctl`
 - Publishing runs from `.github/workflows/publish.yml` on `v*` tags; do not tag from a branch
